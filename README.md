@@ -1,4 +1,4 @@
-# Funding the Fall
+# Group M FINM 33150 Final Trading Project
 
 Cross-venue carry and cascade alpha in crypto perpetuals.
 
