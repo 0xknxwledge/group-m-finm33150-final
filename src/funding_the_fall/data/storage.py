@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import polars as pl
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
@@ -19,42 +20,79 @@ def _ensure_dir() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def save_parquet(df: pd.DataFrame, name: str) -> Path:
-    """Save a DataFrame to data/{name}.parquet."""
+# ── Pandas helpers (notebook compat) ──
+
+def _save_parquet_pd(df: pd.DataFrame, name: str) -> Path:
+    """Save a pandas DataFrame to data/{name}.parquet."""
     _ensure_dir()
     path = DATA_DIR / f"{name}.parquet"
     df.to_parquet(path, index=False)
     return path
 
 
-def load_parquet(name: str) -> pd.DataFrame:
-    """Load data/{name}.parquet, raising FileNotFoundError if missing."""
+def _load_parquet_pd(name: str) -> pd.DataFrame:
+    """Load data/{name}.parquet as pandas."""
     path = DATA_DIR / f"{name}.parquet"
     if not path.exists():
         raise FileNotFoundError(f"No data file: {path}")
     return pd.read_parquet(path)
 
 
-def load_funding() -> pd.DataFrame:
+# Keep old names as aliases for backward compat
+save_parquet = _save_parquet_pd
+load_parquet = _load_parquet_pd
+
+
+# ── Polars (primary) ──
+
+def save_parquet_pl(df: pl.DataFrame, name: str) -> Path:
+    """Save a polars DataFrame to data/{name}.parquet."""
+    _ensure_dir()
+    path = DATA_DIR / f"{name}.parquet"
+    df.write_parquet(path)
+    return path
+
+
+def load_parquet_pl(name: str) -> pl.DataFrame:
+    """Load data/{name}.parquet as polars."""
+    path = DATA_DIR / f"{name}.parquet"
+    if not path.exists():
+        raise FileNotFoundError(f"No data file: {path}")
+    return pl.read_parquet(path)
+
+
+# ── Typed loaders (polars) ──
+
+def load_funding() -> pl.DataFrame:
     """Load the unified funding rate dataset."""
-    return load_parquet("funding_rates")
+    return load_parquet_pl("funding_rates")
 
 
-def load_candles() -> pd.DataFrame:
+def load_candles() -> pl.DataFrame:
     """Load the unified candle dataset."""
-    return load_parquet("candles")
+    return load_parquet_pl("candles")
 
 
-def load_oi() -> pd.DataFrame:
+def load_oi() -> pl.DataFrame:
     """Load the unified open interest dataset."""
-    return load_parquet("open_interest")
+    return load_parquet_pl("open_interest")
 
 
-def load_liquidations() -> pd.DataFrame:
+def load_liquidations() -> pl.DataFrame:
     """Load the unified liquidation events dataset."""
-    return load_parquet("liquidations")
+    return load_parquet_pl("liquidations")
 
 
-def load_lending() -> pd.DataFrame:
+def load_lending() -> pl.DataFrame:
     """Load the unified lending positions dataset."""
-    return load_parquet("lending_positions")
+    return load_parquet_pl("lending_positions")
+
+
+def load_lending_events() -> pl.DataFrame:
+    """Load raw HyperLend event logs (polars)."""
+    return load_parquet_pl("lending_events")
+
+
+def load_lending_history() -> pl.DataFrame:
+    """Load replayed historical lending positions (polars)."""
+    return load_parquet_pl("lending_history")

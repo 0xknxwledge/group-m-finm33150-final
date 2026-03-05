@@ -5,11 +5,11 @@ description = "Cross-venue carry and cascade alpha in crypto perpetuals"
 readme = "README.md"
 authors = [
     { name = "John Beecher" },
-    { name = "Antonio Magalhaes Torrea o Braz" },
+    { name = "Antonio Magalhaes Torreao e Braz" },
     { name = "Jean-Luc Choiseul" },
     { name = "Jean Mauratille" },
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = [
     "matplotlib>=3.9.0",
     "numpy>=2.0.0",

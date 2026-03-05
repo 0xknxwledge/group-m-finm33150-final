@@ -41,58 +41,77 @@ Everyone writes their own section of the technical notebook and pitchbook.
 **Goal:** Populate `data/` with parquet files that everyone else consumes.
 
 ### 1a. Funding Rates (`data/fetchers.py`)
-- [ ] **Hyperliquid** — `POST api.hyperliquid.xyz/info` → `fundingHistory` (no auth)
-- [ ] **Binance** — `GET fapi.binance.com/fapi/v1/fundingRate` (no auth, VPN to Switzerland)
-- [ ] **Bybit** — `GET api.bybit.com/v5/market/funding/history` (no auth, VPN to Switzerland)
-- [ ] **dYdX** — `GET indexer.dydx.trade/v4/historicalFunding` (no auth)
-- [ ] **Predicted fundings** — `POST api.hyperliquid.xyz/info` → `predictedFundings` (cross-venue predictions in one call)
+- [x] **Hyperliquid** — via 0xArchive (fallback: direct API)
+- [x] **Lighter** — via 0xArchive
+- [x] **OKX** — paginated, 90-day history
+- [x] **Kraken** — hourly rates aggregated to 8h
+- [x] **Binance** — paginated, VPN required
+- [x] **Bybit** — cursor-paginated, VPN required
+- [x] **dYdX** — paginated via `effectiveAtBeforeOrAt`
+- [x] **Predicted fundings** — `predictedFundings` endpoint
 
 ### 1b. Candles / Mark Prices (`data/fetchers.py`)
-- [ ] **Hyperliquid** candles for all 5 tokens, 1h interval, 90+ days
+- [x] All 7 venues, all 5 tokens, configurable interval
 
 ### 1c. Open Interest (`data/fetchers.py`)
-- [ ] **Hyperliquid** — `metaAndAssetCtxs` (current OI + mark price + funding for all assets)
-- [ ] **Binance** — `GET fapi.binance.com/futures/data/openInterestHist` (VPN)
-- [ ] **Bybit** — `GET api.bybit.com/v5/market/open-interest` (VPN)
+- [x] **Hyperliquid + Lighter** — historical via 0xArchive
+- [x] **OKX, Kraken, Binance, Bybit, dYdX** — snapshots via live APIs
 
 ### 1d. Liquidation Events (`data/fetchers.py`)
-- [ ] **Binance** — `GET fapi.binance.com/fapi/v1/forceOrders` (public, no auth, VPN)
-- [ ] **Coinalyze** — `GET api.coinalyze.net/v1/liquidation-history` (free, no auth)
+- [x] **0xArchive** — Hyperliquid liquidations (May 2025+)
+- [x] **OKX** — recent liquidation orders
+- [x] **Binance** — forced liquidation orders (VPN)
 
 ### 1e. Lending Positions (`data/lending.py`) — for cascade model
-- [ ] **HyperLend** (~$360M TVL) — query via HyperEVM RPC (Aave V3 fork)
-  - RPC: `https://rpc.hyperliquid.xyz/evm` (free, 100 req/min, chain ID 999)
-  - Pool contract: `0x00A89d7a5A02160f20150EbEA7a2b5E4879A1A8b`
-  - Scan `Borrow` events to discover active borrowers
-  - Call `getUserAccountData(address)` → health factor, collateral, debt
-  - Call `getReserveData(asset)` → total supplied, borrowed, utilization
-- [ ] **Morpho Blue** (~$5.4B TVL) — query via The Graph subgraph
-  - Free tier sufficient (signup at https://thegraph.com/studio/ for API key)
-  - GraphQL query for all borrower positions: market, collateral, debt, LTV
-  - LLTV + liquidation penalty available per market
-- [ ] **DeFi Llama** — historical TVL for HyperLend + Morpho Blue
-  - `GET https://api.llama.fi/protocol/{protocol}` (free, no auth)
+- [x] **HyperLend event replay** — `scan_hyperlend_events()` + `replay_positions()`
+- [x] **HyperLend current snapshot** — `fetch_hyperlend_positions()`
+- [x] **Reserve price history** — `fetch_reserve_prices()` via 0xArchive (ETH) + stablecoin pegs
+- [ ] **Reserve token discovery** — populate RESERVES dict with full addresses, decimals, LTs from first scan
+- [x] **DeFi Llama** — `fetch_tvl_history()` for HyperLend TVL plots
 
 ### 1f. Infrastructure
-- [ ] **Unified schema** — all DataFrames follow column specs in `fetchers.py` and `lending.py`
-- [ ] **Storage layer** — fetch once, save to `data/*.parquet`, load with `storage.py`
+- [x] **Unified schema** — all polars DataFrames follow column specs in `fetchers.py`
+- [x] **Storage layer** — polars loaders in `storage.py`, pandas compat kept
 - [ ] **Data validation** — timestamps aligned to 8h funding epochs, no gaps, UTC
+- [ ] **Initial data pull** — `scripts/pull_data.py`, see instructions below
 
-**Tokens:** BTC, ETH, SOL, HYPE, DOGE
-**Lookback:** 90 days minimum (more is better for backtest statistical significance)
+**Tokens:** BTC, ETH, SOL, HYPE, DOGE (all 5 × all 7 venues)
+**Lookback:** 90 days minimum (0xArchive has data from Apr 2023)
 
-### Data Sources (all free, no paid APIs)
+### Data Sources
 
-| Source | Data | Endpoint | Auth |
-|--------|------|----------|------|
-| Hyperliquid | Funding, candles, OI, predicted fundings | `api.hyperliquid.xyz/info` | None |
-| Binance | Funding, OI, liquidation orders | `fapi.binance.com/fapi/v1/*` | None (VPN) |
-| Bybit | Funding, OI | `api.bybit.com/v5/market/*` | None (VPN) |
-| dYdX | Funding | `indexer.dydx.trade/v4/*` | None |
-| Coinalyze | Aggregated liquidation history | `api.coinalyze.net/v1/*` | None |
-| HyperLend | Borrower positions, health factors | `rpc.hyperliquid.xyz/evm` (Aave V3 ABI) | None |
-| Morpho Blue | Borrower positions, LTV, markets | The Graph subgraph (GraphQL) | Free Graph API key |
-| DeFi Llama | Historical TVL (HyperLend, Morpho) | `api.llama.fi/protocol/*` | None |
+| Source | Data | Auth | Notes |
+|--------|------|------|-------|
+| 0xArchive | Funding, candles, OI, liquidations, prices (HL + Lighter) | API key | Historical from Apr 2023 |
+| OKX | Funding, candles, OI, liquidations | None | Free, works from US |
+| Kraken Futures | Funding (hourly→8h), candles, OI | None | Free, works from US |
+| Binance | Funding, candles, OI, liquidations | None | VPN required |
+| Bybit | Funding, candles, OI | None | VPN required |
+| dYdX | Funding, candles, OI | None | No auth needed |
+| Hyperliquid | Live meta, orderbook, predicted fundings | None | Direct API fallback |
+| HyperLend | Lending positions via event replay | None | HyperEVM RPC |
+| DeFi Llama | TVL history | None | Free |
+
+### Antonio's remaining tasks
+
+1. **Set `OXARCHIVE_API_KEY` env var** and verify access.
+
+2. **Quick smoke test** — confirm one venue works:
+   ```bash
+   PYTHONPATH=src python scripts/pull_data.py --venues hyperliquid --coins BTC --days 7
+   ```
+
+3. **Full deep pull** (VPN on for Binance/Bybit):
+   ```bash
+   PYTHONPATH=src python scripts/pull_data.py
+   ```
+   This pulls 0xArchive back to Apr 2023 (~1060 days), Kraken full history, OKX 90 days, Binance/Bybit/dYdX max available. Candles are the biggest dataset — use `--skip-candles` for a faster first pass on funding/OI/liquidations only.
+
+4. **Validate output** — check the coverage matrix printed at the end. Every coin×venue cell should have rows. Gaps in VPN venues are OK for now.
+
+5. **Reserve prices** — the script also pulls `reserve_prices.parquet` for the cascade model. Verify ETH prices look reasonable.
+
+6. **Commit parquet files** are gitignored — push the script, not the data.
 
 ---
 
@@ -209,7 +228,6 @@ Everyone writes their own section of the technical notebook and pitchbook.
 
 These require a sentence or two in the notebook justifying the choice (per professor's instructions):
 
-- Why 90-day lookback?
 - Why 5× leverage cap?
 - Why 70/30 carry/cascade split?
 - Why these 5 tokens?
