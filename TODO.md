@@ -10,12 +10,12 @@ FINM 33150 — Winter 2026
 
 | Member | Module | Path |
 |--------|--------|------|
-| **Antonio Braz** | Data Pipeline | `src/funding_the_fall/data/` |
-| **John Beecher** | Models (Merton + Cascade) | `src/funding_the_fall/models/` |
+| **John Beecher** | Data Pipeline + Models (Merton + Kou) | `src/funding_the_fall/data/`, `src/funding_the_fall/models/` |
+| **Antonio Braz** | Cascade Simulator | `src/funding_the_fall/models/cascade.py` |
 | **Jean-Luc Choiseul** | Strategy (Carry + Allocation) | `src/funding_the_fall/strategy/` |
 | **Jean Mauratille** | Backtester + Transaction Costs | `src/funding_the_fall/backtest/` |
 
-**Dependency chain:** Antonio → John + Jean-Luc → Jean
+**Dependency chain:** John (data) → John (Merton/Kou) + Antonio (cascade) + Jean-Luc → Jean
 
 Everyone writes their own section of the technical notebook and pitchbook.
 
@@ -36,7 +36,7 @@ Everyone writes their own section of the technical notebook and pitchbook.
 
 ---
 
-## Phase 1 — Data Pipeline (Antonio)
+## Phase 1 — Data Pipeline (John) 
 
 **Goal:** Populate `data/` with parquet files that everyone else consumes.
 
@@ -100,9 +100,9 @@ PYTHONPATH=src python scripts/pull_data.py --quick --coins BTC  # quick single-c
 
 ---
 
-## Phase 2 — Models (John)
+## Phase 2a — Jump-Diffusion Models (John)
 
-**Goal:** Calibrate jump models, compare Merton vs Kou, build cascade simulator.
+**Goal:** Calibrate jump models, compare Merton vs Kou.
 
 - [ ] **Merton jump-diffusion** (`models/merton.py`)
   - Heuristic stage: iterative 3σ-filtering
@@ -119,10 +119,15 @@ PYTHONPATH=src python scripts/pull_data.py --quick --coins BTC  # quick single-c
   - Show GBM is rejected (Jarque-Bera p ≈ 0)
   - QQ plots and tail probability comparison in notebook
   - Expect Kou preferred for assets with skewed returns (HYPE, SOL)
+
+## Phase 2b — Cascade Simulator (Antonio)
+
+**Goal:** Build cascade simulator using OI + liquidation data from the data pipeline.
+
 - [ ] **Cascade simulator** (`models/cascade.py`)
   - Model: perp liquidations → spot selling → lending liquidations → repeat
   - Price impact via square-root law (Jusselin-Rosenbaum, consistent with Almgren-Chriss)
-  - Parameterize with real OI + liquidation data from Antonio's pipeline
+  - Parameterize with real OI + liquidation data from data pipeline
   - Compute amplification curve A(δ)
 - [ ] **Cascade risk signal**
   - Expose `cascade_risk_signal()` returning risk_score, critical_shock, signal bool
