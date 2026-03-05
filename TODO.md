@@ -141,7 +141,7 @@ Everyone writes their own section of the technical notebook and pitchbook.
   - For each coin × epoch: rank all venue pairs by spread
   - Annualize spreads (8h rate × 3 × 365)
 - [ ] **Grid search over entry/exit rules** (`strategy/carry.py`)
-  - Do NOT hardcode thresholds — grid search per (coin, venue_pair)
+  - Grid search per (coin, venue_pair)
   - Entry spread grid: [5%, 8%, 10%, 12%, 15%, 20%] annualized
   - Exit spread grid: [1%, 2%, 3%, 5%] annualized
   - Max holding period grid: [15, 30, 45, 60] epochs (5–20 days)
@@ -209,7 +209,6 @@ Everyone writes their own section of the technical notebook and pitchbook.
 
 These require a sentence or two in the notebook justifying the choice (per professor's instructions):
 
-- Why 10% annualized spread entry threshold?
 - Why 90-day lookback?
 - Why 5× leverage cap?
 - Why 70/30 carry/cascade split?
