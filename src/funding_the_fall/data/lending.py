@@ -553,7 +553,7 @@ def fetch_reserve_prices(days: int = 90) -> pl.DataFrame:
     if not eth_prices.is_empty():
         eth_df = eth_prices.with_columns(
             pl.lit("0x2e4df919ac903b3d57a97a1bcc6bfad3").alias("reserve"),
-            pl.col("markPrice").alias("price_usd"),
+            pl.col("mark_price").alias("price_usd"),
         ).select("timestamp", "reserve", "price_usd")
         frames.append(eth_df)
 

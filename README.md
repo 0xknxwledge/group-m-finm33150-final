@@ -23,9 +23,9 @@ Two-component strategy targeting structural inefficiencies in crypto perpetual f
 | 0xArchive | Funding, candles, OI, liquidations, prices (Hyperliquid + Lighter) | API key | Historical from Apr 2023 |
 | OKX | Funding, candles, OI, liquidations | None | Free, works from US |
 | Kraken Futures | Funding (hourly→8h), candles, OI | None | Free, works from US |
-| Binance | Funding, candles, OI, liquidations | None | VPN required |
+| Binance | Funding, candles, OI | None | VPN required |
 | Bybit | Funding, candles, OI | None | VPN required |
-| dYdX | Funding, candles, OI | None | No auth needed |
+| dYdX | Funding (hourly→8h), candles, OI | None | No auth needed |
 | Hyperliquid | Live meta, orderbook, predicted fundings | None | Direct API fallback |
 | HyperLend | Lending positions via on-chain event replay | None | HyperEVM RPC |
 | DeFi Llama | TVL history | None | Free |
@@ -55,7 +55,7 @@ src/funding_the_fall/   # core library
 scripts/                # standalone scripts
 notebooks/              # jupyter notebooks
 tests/                  # pytest suite
-data/                   # local data (gitignored)
+data/                   # parquet datasets (committed)
 ```
 
 ## License

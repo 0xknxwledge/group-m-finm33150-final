@@ -24,8 +24,9 @@ htmlcov/
 # OS
 .DS_Store
 
-# Project data (top-level only, not src/*/data/)
-/data/
+# Large data files (keep parquets, ignore raw/temp)
+/data/lending_events.parquet
+/data/lending_history.parquet
 
 # Tools
 .ruff_cache/

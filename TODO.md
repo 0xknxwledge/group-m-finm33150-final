@@ -47,7 +47,7 @@ Everyone writes their own section of the technical notebook and pitchbook.
 - [x] **Kraken** — hourly rates aggregated to 8h
 - [x] **Binance** — paginated, VPN required
 - [x] **Bybit** — cursor-paginated, VPN required
-- [x] **dYdX** — paginated via `effectiveAtBeforeOrAt`
+- [x] **dYdX** — paginated, hourly rates aggregated to 8h
 - [x] **Predicted fundings** — `predictedFundings` endpoint
 
 ### 1b. Candles / Mark Prices (`data/fetchers.py`)
@@ -60,7 +60,7 @@ Everyone writes their own section of the technical notebook and pitchbook.
 ### 1d. Liquidation Events (`data/fetchers.py`)
 - [x] **0xArchive** — Hyperliquid liquidations (May 2025+)
 - [x] **OKX** — recent liquidation orders
-- [x] **Binance** — forced liquidation orders (VPN)
+- [x] **Binance** — forced liquidation orders (VPN + API key + HMAC; wired up, needs creds)
 
 ### 1e. Lending Positions (`data/lending.py`) — for cascade model
 - [x] **HyperLend event replay** — `scan_hyperlend_events()` + `replay_positions()`
@@ -72,46 +72,31 @@ Everyone writes their own section of the technical notebook and pitchbook.
 ### 1f. Infrastructure
 - [x] **Unified schema** — all polars DataFrames follow column specs in `fetchers.py`
 - [x] **Storage layer** — polars loaders in `storage.py`, pandas compat kept
-- [ ] **Data validation** — timestamps aligned to 8h funding epochs, no gaps, UTC
-- [ ] **Initial data pull** — `scripts/pull_data.py`, see instructions below
+- [x] **Data validation** — funding rates aligned to 8h epochs (Kraken + dYdX hourly→8h aggregation)
+- [x] **Initial data pull** — completed via `scripts/pull_data.py` + `scripts/backfill_data.py`
+- [x] **Parquet files committed** — `data/*.parquet` checked into git (~3MB total)
 
 **Tokens:** BTC, ETH, SOL, HYPE, DOGE (all 5 × all 7 venues)
-**Lookback:** 90 days minimum (0xArchive has data from Apr 2023)
+**Lookback:** 364 days (0xArchive plan limit)
 
-### Data Sources
+### Current dataset (committed in `data/`)
 
-| Source | Data | Auth | Notes |
-|--------|------|------|-------|
-| 0xArchive | Funding, candles, OI, liquidations, prices (HL + Lighter) | API key | Historical from Apr 2023 |
-| OKX | Funding, candles, OI, liquidations | None | Free, works from US |
-| Kraken Futures | Funding (hourly→8h), candles, OI | None | Free, works from US |
-| Binance | Funding, candles, OI, liquidations | None | VPN required |
-| Bybit | Funding, candles, OI | None | VPN required |
-| dYdX | Funding, candles, OI | None | No auth needed |
-| Hyperliquid | Live meta, orderbook, predicted fundings | None | Direct API fallback |
-| HyperLend | Lending positions via event replay | None | HyperEVM RPC |
-| DeFi Llama | TVL history | None | Free |
+| File | Rows | Coverage |
+|------|------|----------|
+| `funding_rates.parquet` | 29,217 | 7 venues × 5 coins, 2025-03 → 2026-03 |
+| `candles.parquet` | ~170K | 7 venues × 5 coins, hourly |
+| `open_interest.parquet` | 10,025 | Historical (HL/Lighter) + snapshots (others) |
+| `liquidations.parquet` | 8,059 | 0xArchive (May 2025+) + OKX |
+| `reserve_prices.parquet` | 3,000 | ETH + USDC/USDT for lending replay |
 
-### Antonio's remaining tasks
+### Re-pulling data
 
-1. **Set `OXARCHIVE_API_KEY` env var** and verify access.
-
-2. **Quick smoke test** — confirm one venue works:
-   ```bash
-   PYTHONPATH=src python scripts/pull_data.py --venues hyperliquid --coins BTC --days 7
-   ```
-
-3. **Full deep pull** (VPN on for Binance/Bybit):
-   ```bash
-   PYTHONPATH=src python scripts/pull_data.py
-   ```
-   This pulls 0xArchive back to Apr 2023 (~1060 days), Kraken full history, OKX 90 days, Binance/Bybit/dYdX max available. Candles are the biggest dataset — use `--skip-candles` for a faster first pass on funding/OI/liquidations only.
-
-4. **Validate output** — check the coverage matrix printed at the end. Every coin×venue cell should have rows. Gaps in VPN venues are OK for now.
-
-5. **Reserve prices** — the script also pulls `reserve_prices.parquet` for the cascade model. Verify ETH prices look reasonable.
-
-6. **Commit parquet files** are gitignored — push the script, not the data.
+To refresh data (e.g. for a newer window), set `OXARCHIVE_API_KEY` and run:
+```bash
+PYTHONPATH=src python scripts/pull_data.py                    # full pull
+PYTHONPATH=src python scripts/backfill_data.py                # fix liquidations + dYdX
+PYTHONPATH=src python scripts/pull_data.py --quick --coins BTC  # quick single-coin test
+```
 
 ---
 

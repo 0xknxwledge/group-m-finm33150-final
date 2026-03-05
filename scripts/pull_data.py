@@ -80,8 +80,8 @@ logging.basicConfig(
 )
 log = logging.getLogger("pull_data")
 
-# Apr 1 2023 — 0xArchive earliest Hyperliquid data
-DEEP_HISTORY_DAYS = (datetime.now(timezone.utc) - datetime(2023, 4, 1, tzinfo=timezone.utc)).days
+# 0xArchive build tier allows up to 364 days of history
+DEEP_HISTORY_DAYS = 364
 
 
 def _safe(fn, *args, label: str = "") -> pl.DataFrame:
