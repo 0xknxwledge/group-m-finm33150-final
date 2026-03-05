@@ -24,10 +24,11 @@ htmlcov/
 # OS
 .DS_Store
 
-# Project
-data/
+# Project data (top-level only, not src/*/data/)
+/data/
 
 # Tools
 .ruff_cache/
 .mypy_cache/
 .claude/
+CLAUDE.md
