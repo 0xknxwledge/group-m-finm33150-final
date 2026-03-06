@@ -39,7 +39,7 @@ class Position:
     collateral_usd: float
     debt_usd: float
     liquidation_threshold: float  # collateral/debt ratio triggering liquidation
-    layer: str                    # "perp", "hyperlend", or "morpho"
+    layer: str  # "perp", "hyperlend", or "morpho"
 
 
 @dataclass
@@ -48,7 +48,7 @@ class CascadeResult:
 
     initial_shock: float
     effective_shock: float
-    amplification: float           # effective / initial
+    amplification: float  # effective / initial
     rounds: int
     total_debt_liquidated: float
     liquidations_by_layer: dict[str, float] = field(default_factory=dict)
@@ -125,7 +125,9 @@ def simulate_cascade(
         cumulative_drop = min(cumulative_drop, 1.0)
         surviving = still_alive
 
-    amplification = cumulative_drop / initial_shock_pct if initial_shock_pct > 0 else 1.0
+    amplification = (
+        cumulative_drop / initial_shock_pct if initial_shock_pct > 0 else 1.0
+    )
 
     return CascadeResult(
         initial_shock=initial_shock_pct,
@@ -172,7 +174,10 @@ def cascade_risk_signal(
     """
     probe_shocks = np.arange(0.005, 0.505, 0.005)
     results = compute_amplification_curve(
-        positions, current_price, probe_shocks, orderbook_depth_usd,
+        positions,
+        current_price,
+        probe_shocks,
+        orderbook_depth_usd,
     )
 
     # A(5%) — the headline amplification number

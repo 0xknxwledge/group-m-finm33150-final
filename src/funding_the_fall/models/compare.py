@@ -28,7 +28,7 @@ class ModelComparison:
     n_obs: int
     merton: MertonParams
     kou: KouParams
-    preferred: str             # "merton" or "kou" based on BIC
+    preferred: str  # "merton" or "kou" based on BIC
 
     @property
     def bic_delta(self) -> float:

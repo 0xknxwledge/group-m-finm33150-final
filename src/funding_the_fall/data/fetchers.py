@@ -95,16 +95,36 @@ DYDX_SYMBOLS: dict[str, str] = {
 VENUE_COINS: dict[str, list[str]] = {v: list(TOKENS) for v in VENUES}
 
 # ── Empty schema helpers ──
-_FUNDING_SCHEMA = {"timestamp": pl.Datetime("us", "UTC"), "venue": pl.Utf8,
-                   "coin": pl.Utf8, "funding_rate": pl.Float64}
-_CANDLE_SCHEMA = {"timestamp": pl.Datetime("us", "UTC"), "venue": pl.Utf8,
-                  "coin": pl.Utf8, "o": pl.Float64, "h": pl.Float64,
-                  "l": pl.Float64, "c": pl.Float64, "v": pl.Float64}
-_OI_SCHEMA = {"timestamp": pl.Datetime("us", "UTC"), "venue": pl.Utf8,
-              "coin": pl.Utf8, "oi_usd": pl.Float64}
-_LIQ_SCHEMA = {"timestamp": pl.Datetime("us", "UTC"), "venue": pl.Utf8,
-               "coin": pl.Utf8, "side": pl.Utf8, "size_usd": pl.Float64,
-               "price": pl.Float64}
+_FUNDING_SCHEMA = {
+    "timestamp": pl.Datetime("us", "UTC"),
+    "venue": pl.Utf8,
+    "coin": pl.Utf8,
+    "funding_rate": pl.Float64,
+}
+_CANDLE_SCHEMA = {
+    "timestamp": pl.Datetime("us", "UTC"),
+    "venue": pl.Utf8,
+    "coin": pl.Utf8,
+    "o": pl.Float64,
+    "h": pl.Float64,
+    "l": pl.Float64,
+    "c": pl.Float64,
+    "v": pl.Float64,
+}
+_OI_SCHEMA = {
+    "timestamp": pl.Datetime("us", "UTC"),
+    "venue": pl.Utf8,
+    "coin": pl.Utf8,
+    "oi_usd": pl.Float64,
+}
+_LIQ_SCHEMA = {
+    "timestamp": pl.Datetime("us", "UTC"),
+    "venue": pl.Utf8,
+    "coin": pl.Utf8,
+    "side": pl.Utf8,
+    "size_usd": pl.Float64,
+    "price": pl.Float64,
+}
 
 
 def _empty(schema: dict) -> pl.DataFrame:
@@ -114,6 +134,7 @@ def _empty(schema: dict) -> pl.DataFrame:
 # ═══════════════════════════════════════════════════════════════════════
 # Hyperliquid direct API
 # ═══════════════════════════════════════════════════════════════════════
+
 
 def _hl_post(payload: dict[str, Any]) -> Any:
     """POST to Hyperliquid info API and return parsed JSON."""
@@ -140,15 +161,17 @@ def fetch_hyperliquid_meta() -> tuple[pl.DataFrame, dict[str, dict]]:
         contexts[coin] = ctx
         mp = float(ctx.get("markPx") or 0)
         oi = float(ctx.get("openInterest") or 0)
-        rows.append({
-            "coin": coin,
-            "oi": oi,
-            "mark_price": mp,
-            "funding_rate": float(ctx.get("funding") or 0),
-            "premium": float(ctx.get("premium") or 0),
-            "day_ntl_vlm": float(ctx.get("dayNtlVlm") or 0),
-            "oi_usd": oi * mp,
-        })
+        rows.append(
+            {
+                "coin": coin,
+                "oi": oi,
+                "mark_price": mp,
+                "funding_rate": float(ctx.get("funding") or 0),
+                "premium": float(ctx.get("premium") or 0),
+                "day_ntl_vlm": float(ctx.get("dayNtlVlm") or 0),
+                "oi_usd": oi * mp,
+            }
+        )
 
     now = datetime.now(timezone.utc)
     df = pl.DataFrame(rows).with_columns(
@@ -159,7 +182,9 @@ def fetch_hyperliquid_meta() -> tuple[pl.DataFrame, dict[str, dict]]:
 
 
 def _fetch_candles_hyperliquid(
-    coin: str, interval: str = "1h", days: int = 90,
+    coin: str,
+    interval: str = "1h",
+    days: int = 90,
 ) -> pl.DataFrame:
     """Fetch OHLCV candles from Hyperliquid (fallback if 0xArchive is down)."""
     end_ms = int(time.time() * 1000)
@@ -168,11 +193,17 @@ def _fetch_candles_hyperliquid(
     cursor = start_ms
 
     while cursor < end_ms:
-        data = _hl_post({
-            "type": "candleSnapshot",
-            "req": {"coin": coin, "interval": interval,
-                    "startTime": cursor, "endTime": end_ms},
-        })
+        data = _hl_post(
+            {
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": coin,
+                    "interval": interval,
+                    "startTime": cursor,
+                    "endTime": end_ms,
+                },
+            }
+        )
         if not data:
             break
         all_candles.extend(data)
@@ -206,10 +237,14 @@ def _fetch_funding_hyperliquid(coin: str, days: int = 90) -> pl.DataFrame:
     cursor = start_ms
 
     while cursor < end_ms:
-        data = _hl_post({
-            "type": "fundingHistory",
-            "coin": coin, "startTime": cursor, "endTime": end_ms,
-        })
+        data = _hl_post(
+            {
+                "type": "fundingHistory",
+                "coin": coin,
+                "startTime": cursor,
+                "endTime": end_ms,
+            }
+        )
         if not data:
             break
         all_records.extend(data)
@@ -272,23 +307,30 @@ def fetch_predicted_funding() -> pl.DataFrame:
         pairs = entry[1] if len(entry) > 1 else []
         for pair in pairs:
             coin, rate = pair[0], float(pair[1])
-            rows.append({
-                "timestamp": now,
-                "venue": venue_name,
-                "coin": coin,
-                "predicted_rate": rate,
-            })
+            rows.append(
+                {
+                    "timestamp": now,
+                    "venue": venue_name,
+                    "coin": coin,
+                    "predicted_rate": rate,
+                }
+            )
     if not rows:
-        return pl.DataFrame(schema={
-            "timestamp": pl.Datetime("us", "UTC"), "venue": pl.Utf8,
-            "coin": pl.Utf8, "predicted_rate": pl.Float64,
-        })
+        return pl.DataFrame(
+            schema={
+                "timestamp": pl.Datetime("us", "UTC"),
+                "venue": pl.Utf8,
+                "coin": pl.Utf8,
+                "predicted_rate": pl.Float64,
+            }
+        )
     return pl.DataFrame(rows).cast({"timestamp": pl.Datetime("us", "UTC")})
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # 0xArchive REST API (Hyperliquid + Lighter historical data)
 # ═══════════════════════════════════════════════════════════════════════
+
 
 def _0xa_get(
     path: str,
@@ -308,7 +350,9 @@ def _0xa_get(
     while True:
         resp = requests.get(
             f"{OXARCHIVE_API}{path}",
-            params=params, headers=headers, timeout=30,
+            params=params,
+            headers=headers,
+            timeout=30,
         )
         resp.raise_for_status()
         body = resp.json()
@@ -328,6 +372,7 @@ def _0xa_get(
 
 # ── 0xArchive funding ──
 
+
 def _parse_0xa_ts(col: str = "timestamp") -> pl.Expr:
     """Parse 0xArchive ISO-8601 timestamp strings to Datetime."""
     return pl.col(col).str.to_datetime("%+", time_zone="UTC")
@@ -335,12 +380,18 @@ def _parse_0xa_ts(col: str = "timestamp") -> pl.Expr:
 
 def _epoch_ms_to_dt(col: str) -> pl.Expr:
     """Convert epoch-millisecond column to Datetime(us, UTC)."""
-    return (pl.from_epoch(pl.col(col).cast(pl.Int64), time_unit="ms")
-              .dt.cast_time_unit("us").dt.replace_time_zone("UTC"))
+    return (
+        pl.from_epoch(pl.col(col).cast(pl.Int64), time_unit="ms")
+        .dt.cast_time_unit("us")
+        .dt.replace_time_zone("UTC")
+    )
 
 
 def _fetch_funding_0xa(
-    coin: str, venue_path: str, venue_name: str, days: int = 90,
+    coin: str,
+    venue_path: str,
+    venue_name: str,
+    days: int = 90,
 ) -> pl.DataFrame:
     """Fetch funding from 0xArchive for Hyperliquid or Lighter."""
     end_ms = int(time.time() * 1000)
@@ -365,17 +416,25 @@ def _fetch_funding_0xa(
 
 # ── 0xArchive candles ──
 
+
 def _fetch_candles_0xa(
-    coin: str, venue_path: str, venue_name: str,
-    interval: str = "1h", days: int = 90,
+    coin: str,
+    venue_path: str,
+    venue_name: str,
+    interval: str = "1h",
+    days: int = 90,
 ) -> pl.DataFrame:
     """Fetch candles from 0xArchive for Hyperliquid or Lighter."""
     end_ms = int(time.time() * 1000)
     start_ms = end_ms - (days * 24 * 3600 * 1000)
     data = _0xa_get(
         f"/v1/{venue_path}/candles/{coin}",
-        params={"start": str(start_ms), "end": str(end_ms),
-                "interval": interval, "limit": "1000"},
+        params={
+            "start": str(start_ms),
+            "end": str(end_ms),
+            "interval": interval,
+            "limit": "1000",
+        },
         paginate=True,
     )
     if not data:
@@ -397,8 +456,12 @@ def _fetch_candles_0xa(
 
 # ── 0xArchive open interest ──
 
+
 def _fetch_oi_0xa(
-    coin: str, venue_path: str, venue_name: str, days: int = 90,
+    coin: str,
+    venue_path: str,
+    venue_name: str,
+    days: int = 90,
 ) -> pl.DataFrame:
     """Fetch historical OI from 0xArchive for Hyperliquid or Lighter."""
     end_ms = int(time.time() * 1000)
@@ -416,12 +479,16 @@ def _fetch_oi_0xa(
         _parse_0xa_ts().alias("timestamp"),
         pl.lit(venue_name).alias("venue"),
         pl.lit(coin).alias("coin"),
-        (pl.col("open_interest").cast(pl.Float64) * pl.col("mark_price").cast(pl.Float64)).alias("oi_usd"),
+        (
+            pl.col("open_interest").cast(pl.Float64)
+            * pl.col("mark_price").cast(pl.Float64)
+        ).alias("oi_usd"),
     ).select("timestamp", "venue", "coin", "oi_usd")
     return df.unique(subset=["timestamp", "coin"]).sort("timestamp")
 
 
 # ── 0xArchive liquidations (Hyperliquid only, May 2025+) ──
+
 
 def _fetch_liquidations_0xa(coin: str, days: int = 90) -> pl.DataFrame:
     """Fetch liquidations from 0xArchive (Hyperliquid only, May 2025+)."""
@@ -443,7 +510,9 @@ def _fetch_liquidations_0xa(coin: str, days: int = 90) -> pl.DataFrame:
         pl.lit("hyperliquid").alias("venue"),
         pl.lit(coin).alias("coin"),
         pl.col("side").cast(pl.Utf8),
-        (pl.col("price").cast(pl.Float64) * pl.col("size").cast(pl.Float64)).alias("size_usd"),
+        (pl.col("price").cast(pl.Float64) * pl.col("size").cast(pl.Float64)).alias(
+            "size_usd"
+        ),
         pl.col("price").cast(pl.Float64),
     ).select("timestamp", "venue", "coin", "side", "size_usd", "price")
     return df.sort("timestamp")
@@ -451,8 +520,11 @@ def _fetch_liquidations_0xa(coin: str, days: int = 90) -> pl.DataFrame:
 
 # ── 0xArchive prices (for lending module) ──
 
+
 def _fetch_prices_0xa(
-    coin: str, venue_path: str = "hyperliquid", days: int = 90,
+    coin: str,
+    venue_path: str = "hyperliquid",
+    days: int = 90,
 ) -> pl.DataFrame:
     """Fetch price history from 0xArchive. Returns [timestamp, markPrice]."""
     end_ms = int(time.time() * 1000)
@@ -463,9 +535,12 @@ def _fetch_prices_0xa(
         paginate=True,
     )
     if not data:
-        return pl.DataFrame(schema={
-            "timestamp": pl.Datetime("us", "UTC"), "mark_price": pl.Float64,
-        })
+        return pl.DataFrame(
+            schema={
+                "timestamp": pl.Datetime("us", "UTC"),
+                "mark_price": pl.Float64,
+            }
+        )
     df = pl.DataFrame(data)
     df = df.with_columns(
         _parse_0xa_ts().alias("timestamp"),
@@ -477,6 +552,7 @@ def _fetch_prices_0xa(
 # ═══════════════════════════════════════════════════════════════════════
 # OKX (free, no auth, works from US)
 # ═══════════════════════════════════════════════════════════════════════
+
 
 def _okx_get(path: str, params: dict[str, Any] | None = None) -> list:
     """GET from OKX public API."""
@@ -521,12 +597,17 @@ def _fetch_funding_okx(coin: str, days: int = 90) -> pl.DataFrame:
         pl.lit("okx").alias("venue"),
         pl.lit(coin).alias("coin"),
     ).select("timestamp", "venue", "coin", "funding_rate")
-    df = df.filter(pl.col("timestamp") >= pl.lit(datetime.fromtimestamp(cutoff_ms / 1000, tz=timezone.utc)))
+    df = df.filter(
+        pl.col("timestamp")
+        >= pl.lit(datetime.fromtimestamp(cutoff_ms / 1000, tz=timezone.utc))
+    )
     return df.unique(subset=["timestamp", "coin"]).sort("timestamp")
 
 
 def _fetch_candles_okx(
-    coin: str, interval: str = "1H", days: int = 90,
+    coin: str,
+    interval: str = "1H",
+    days: int = 90,
 ) -> pl.DataFrame:
     """Fetch candles from OKX."""
     sym = OKX_SYMBOLS.get(coin)
@@ -557,18 +638,26 @@ def _fetch_candles_okx(
     # OKX candle format: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
     rows = []
     for c in all_data:
-        rows.append({
-            "ts": int(c[0]),
-            "o": float(c[1]), "h": float(c[2]),
-            "l": float(c[3]), "c": float(c[4]), "v": float(c[5]),
-        })
+        rows.append(
+            {
+                "ts": int(c[0]),
+                "o": float(c[1]),
+                "h": float(c[2]),
+                "l": float(c[3]),
+                "c": float(c[4]),
+                "v": float(c[5]),
+            }
+        )
     df = pl.DataFrame(rows)
     df = df.with_columns(
         _epoch_ms_to_dt("ts").alias("timestamp"),
         pl.lit("okx").alias("venue"),
         pl.lit(coin).alias("coin"),
     ).select("timestamp", "venue", "coin", "o", "h", "l", "c", "v")
-    df = df.filter(pl.col("timestamp") >= pl.lit(datetime.fromtimestamp(cutoff_ms / 1000, tz=timezone.utc)))
+    df = df.filter(
+        pl.col("timestamp")
+        >= pl.lit(datetime.fromtimestamp(cutoff_ms / 1000, tz=timezone.utc))
+    )
     return df.unique(subset=["timestamp", "coin"]).sort("timestamp")
 
 
@@ -578,8 +667,7 @@ def _fetch_oi_okx(coin: str) -> pl.DataFrame:
     if not sym:
         return _empty(_OI_SCHEMA)
 
-    data = _okx_get("/api/v5/public/open-interest",
-                     {"instType": "SWAP", "instId": sym})
+    data = _okx_get("/api/v5/public/open-interest", {"instType": "SWAP", "instId": sym})
     if not data:
         return _empty(_OI_SCHEMA)
 
@@ -587,12 +675,16 @@ def _fetch_oi_okx(coin: str) -> pl.DataFrame:
     # OI is in contracts; multiply by price to get USD
     oi_val = float(data[0].get("oi", 0))
     # Use last price as proxy (not available directly; set oi_usd = oi for now)
-    return pl.DataFrame([{
-        "timestamp": now,
-        "venue": "okx",
-        "coin": coin,
-        "oi_usd": oi_val,
-    }]).cast({"timestamp": pl.Datetime("us", "UTC")})
+    return pl.DataFrame(
+        [
+            {
+                "timestamp": now,
+                "venue": "okx",
+                "coin": coin,
+                "oi_usd": oi_val,
+            }
+        ]
+    ).cast({"timestamp": pl.Datetime("us", "UTC")})
 
 
 def _fetch_liquidations_okx(coin: str) -> pl.DataFrame:
@@ -603,8 +695,10 @@ def _fetch_liquidations_okx(coin: str) -> pl.DataFrame:
 
     # OKX requires 'uly' (underlying) not 'instId' for liquidations
     uly = sym.replace("-SWAP", "")
-    data = _okx_get("/api/v5/public/liquidation-orders",
-                     {"instType": "SWAP", "uly": uly, "state": "filled"})
+    data = _okx_get(
+        "/api/v5/public/liquidation-orders",
+        {"instType": "SWAP", "uly": uly, "state": "filled"},
+    )
     if not data:
         return _empty(_LIQ_SCHEMA)
 
@@ -612,14 +706,16 @@ def _fetch_liquidations_okx(coin: str) -> pl.DataFrame:
     for entry in data:
         details = entry.get("details", [])
         for d in details:
-            rows.append({
-                "timestamp": int(d.get("ts", "0")),
-                "venue": "okx",
-                "coin": coin,
-                "side": d.get("side", "unknown"),
-                "size_usd": float(d.get("sz", 0)) * float(d.get("bkPx", 0)),
-                "price": float(d.get("bkPx", 0)),
-            })
+            rows.append(
+                {
+                    "timestamp": int(d.get("ts", "0")),
+                    "venue": "okx",
+                    "coin": coin,
+                    "side": d.get("side", "unknown"),
+                    "size_usd": float(d.get("sz", 0)) * float(d.get("bkPx", 0)),
+                    "price": float(d.get("bkPx", 0)),
+                }
+            )
     if not rows:
         return _empty(_LIQ_SCHEMA)
 
@@ -634,6 +730,7 @@ def _fetch_liquidations_okx(coin: str) -> pl.DataFrame:
 # Kraken Futures (free, no auth, works from US)
 # ═══════════════════════════════════════════════════════════════════════
 
+
 def _fetch_funding_kraken(coin: str, days: int = 90) -> pl.DataFrame:
     """Fetch historical funding rates from Kraken Futures.
 
@@ -645,7 +742,8 @@ def _fetch_funding_kraken(coin: str, days: int = 90) -> pl.DataFrame:
 
     resp = requests.get(
         f"{KRAKEN_FUTURES_API}/derivatives/api/v4/historicalfundingrates",
-        params={"symbol": sym}, timeout=30,
+        params={"symbol": sym},
+        timeout=30,
     )
     resp.raise_for_status()
     body = resp.json()
@@ -666,10 +764,12 @@ def _fetch_funding_kraken(coin: str, days: int = 90) -> pl.DataFrame:
         if ts.timestamp() < cutoff:
             continue
         # Use relativeFundingRate (per-hour rate); fundingRate is absolute USD
-        rows.append({
-            "timestamp": ts,
-            "funding_rate": float(r.get("relativeFundingRate", 0)),
-        })
+        rows.append(
+            {
+                "timestamp": ts,
+                "funding_rate": float(r.get("relativeFundingRate", 0)),
+            }
+        )
 
     if not rows:
         return _empty(_FUNDING_SCHEMA)
@@ -679,9 +779,13 @@ def _fetch_funding_kraken(coin: str, days: int = 90) -> pl.DataFrame:
     df = df.with_columns(
         pl.col("timestamp").dt.truncate("8h").alias("period"),
     )
-    df = df.group_by("period").agg(
-        pl.col("funding_rate").sum(),
-    ).rename({"period": "timestamp"})
+    df = (
+        df.group_by("period")
+        .agg(
+            pl.col("funding_rate").sum(),
+        )
+        .rename({"period": "timestamp"})
+    )
     df = df.with_columns(
         pl.lit("kraken").alias("venue"),
         pl.lit(coin).alias("coin"),
@@ -690,7 +794,9 @@ def _fetch_funding_kraken(coin: str, days: int = 90) -> pl.DataFrame:
 
 
 def _fetch_candles_kraken(
-    coin: str, resolution: str = "1h", days: int = 90,
+    coin: str,
+    resolution: str = "1h",
+    days: int = 90,
 ) -> pl.DataFrame:
     """Fetch candles from Kraken Futures."""
     sym = KRAKEN_SYMBOLS.get(coin)
@@ -713,14 +819,16 @@ def _fetch_candles_kraken(
         ts = c.get("time", 0) / 1000  # ms → s
         if ts < cutoff_s:
             continue
-        rows.append({
-            "timestamp": int(c.get("time", 0)),
-            "o": float(c.get("open", 0)),
-            "h": float(c.get("high", 0)),
-            "l": float(c.get("low", 0)),
-            "c": float(c.get("close", 0)),
-            "v": float(c.get("volume", 0)),
-        })
+        rows.append(
+            {
+                "timestamp": int(c.get("time", 0)),
+                "o": float(c.get("open", 0)),
+                "h": float(c.get("high", 0)),
+                "l": float(c.get("low", 0)),
+                "c": float(c.get("close", 0)),
+                "v": float(c.get("volume", 0)),
+            }
+        )
     if not rows:
         return _empty(_CANDLE_SCHEMA)
 
@@ -736,7 +844,8 @@ def _fetch_candles_kraken(
 def _fetch_oi_kraken() -> pl.DataFrame:
     """Fetch current OI snapshot from Kraken Futures tickers."""
     resp = requests.get(
-        f"{KRAKEN_FUTURES_API}/derivatives/api/v3/tickers", timeout=30,
+        f"{KRAKEN_FUTURES_API}/derivatives/api/v3/tickers",
+        timeout=30,
     )
     resp.raise_for_status()
     body = resp.json()
@@ -753,12 +862,14 @@ def _fetch_oi_kraken() -> pl.DataFrame:
             continue
         oi = float(t.get("openInterest", 0))
         mark = float(t.get("markPrice", 0))
-        rows.append({
-            "timestamp": now,
-            "venue": "kraken",
-            "coin": coin,
-            "oi_usd": oi * mark,
-        })
+        rows.append(
+            {
+                "timestamp": now,
+                "venue": "kraken",
+                "coin": coin,
+                "oi_usd": oi * mark,
+            }
+        )
     if not rows:
         return _empty(_OI_SCHEMA)
     return pl.DataFrame(rows).cast({"timestamp": pl.Datetime("us", "UTC")})
@@ -767,6 +878,7 @@ def _fetch_oi_kraken() -> pl.DataFrame:
 # ═══════════════════════════════════════════════════════════════════════
 # Binance Futures (VPN required)
 # ═══════════════════════════════════════════════════════════════════════
+
 
 def _fetch_funding_binance(coin: str, days: int = 90) -> pl.DataFrame:
     """Fetch historical funding rates from Binance Futures."""
@@ -806,7 +918,9 @@ def _fetch_funding_binance(coin: str, days: int = 90) -> pl.DataFrame:
 
 
 def _fetch_candles_binance(
-    coin: str, interval: str = "1h", days: int = 90,
+    coin: str,
+    interval: str = "1h",
+    days: int = 90,
 ) -> pl.DataFrame:
     """Fetch candles from Binance Futures."""
     sym = BINANCE_SYMBOLS.get(coin)
@@ -820,8 +934,12 @@ def _fetch_candles_binance(
     while start_ms < end_ms:
         resp = requests.get(
             f"{BINANCE_FAPI}/klines",
-            params={"symbol": sym, "interval": interval,
-                    "startTime": start_ms, "limit": 1500},
+            params={
+                "symbol": sym,
+                "interval": interval,
+                "startTime": start_ms,
+                "limit": 1500,
+            },
             timeout=30,
         )
         resp.raise_for_status()
@@ -836,9 +954,17 @@ def _fetch_candles_binance(
         return _empty(_CANDLE_SCHEMA)
 
     # Binance kline: [openTime, o, h, l, c, vol, closeTime, ...]
-    rows = [{"ts": int(c[0]), "o": float(c[1]), "h": float(c[2]),
-             "l": float(c[3]), "c": float(c[4]), "v": float(c[5])}
-            for c in all_data]
+    rows = [
+        {
+            "ts": int(c[0]),
+            "o": float(c[1]),
+            "h": float(c[2]),
+            "l": float(c[3]),
+            "c": float(c[4]),
+            "v": float(c[5]),
+        }
+        for c in all_data
+    ]
     df = pl.DataFrame(rows)
     df = df.with_columns(
         _epoch_ms_to_dt("ts").alias("timestamp"),
@@ -856,17 +982,22 @@ def _fetch_oi_binance(coin: str) -> pl.DataFrame:
 
     resp = requests.get(
         f"{BINANCE_FAPI}/openInterest",
-        params={"symbol": sym}, timeout=30,
+        params={"symbol": sym},
+        timeout=30,
     )
     resp.raise_for_status()
     data = resp.json()
     now = datetime.now(timezone.utc)
-    return pl.DataFrame([{
-        "timestamp": now,
-        "venue": "binance",
-        "coin": coin,
-        "oi_usd": float(data.get("openInterest", 0)),
-    }]).cast({"timestamp": pl.Datetime("us", "UTC")})
+    return pl.DataFrame(
+        [
+            {
+                "timestamp": now,
+                "venue": "binance",
+                "coin": coin,
+                "oi_usd": float(data.get("openInterest", 0)),
+            }
+        ]
+    ).cast({"timestamp": pl.Datetime("us", "UTC")})
 
 
 def _fetch_liquidations_binance(coin: str, days: int = 30) -> pl.DataFrame:
@@ -912,14 +1043,16 @@ def _fetch_liquidations_binance(coin: str, days: int = 30) -> pl.DataFrame:
 
     rows = []
     for d in data:
-        rows.append({
-            "timestamp": int(d.get("time", 0)),
-            "venue": "binance",
-            "coin": coin,
-            "side": d.get("side", "unknown").lower(),
-            "size_usd": float(d.get("price", 0)) * float(d.get("origQty", 0)),
-            "price": float(d.get("price", 0)),
-        })
+        rows.append(
+            {
+                "timestamp": int(d.get("time", 0)),
+                "venue": "binance",
+                "coin": coin,
+                "side": d.get("side", "unknown").lower(),
+                "size_usd": float(d.get("price", 0)) * float(d.get("origQty", 0)),
+                "price": float(d.get("price", 0)),
+            }
+        )
     df = pl.DataFrame(rows)
     df = df.with_columns(_epoch_ms_to_dt("timestamp").alias("timestamp"))
     return df.sort("timestamp")
@@ -928,6 +1061,7 @@ def _fetch_liquidations_binance(coin: str, days: int = 30) -> pl.DataFrame:
 # ═══════════════════════════════════════════════════════════════════════
 # Bybit (VPN required)
 # ═══════════════════════════════════════════════════════════════════════
+
 
 def _fetch_funding_bybit(coin: str, days: int = 90) -> pl.DataFrame:
     """Fetch historical funding rates from Bybit."""
@@ -942,12 +1076,16 @@ def _fetch_funding_bybit(coin: str, days: int = 90) -> pl.DataFrame:
 
     for _ in range(50):  # safety limit
         params: dict[str, Any] = {
-            "category": "linear", "symbol": sym,
-            "startTime": str(start_ms), "endTime": str(current_end), "limit": "200",
+            "category": "linear",
+            "symbol": sym,
+            "startTime": str(start_ms),
+            "endTime": str(current_end),
+            "limit": "200",
         }
         resp = requests.get(
             f"{BYBIT_API}/market/funding/history",
-            params=params, timeout=30,
+            params=params,
+            timeout=30,
         )
         resp.raise_for_status()
         body = resp.json()
@@ -977,7 +1115,9 @@ def _fetch_funding_bybit(coin: str, days: int = 90) -> pl.DataFrame:
 
 
 def _fetch_candles_bybit(
-    coin: str, interval: str = "60", days: int = 90,
+    coin: str,
+    interval: str = "60",
+    days: int = 90,
 ) -> pl.DataFrame:
     """Fetch candles from Bybit. interval='60' means 1h."""
     sym = BYBIT_SYMBOLS.get(coin)
@@ -992,9 +1132,14 @@ def _fetch_candles_bybit(
     for _ in range(100):  # safety limit
         resp = requests.get(
             f"{BYBIT_API}/market/kline",
-            params={"category": "linear", "symbol": sym,
-                    "interval": interval, "start": start_ms,
-                    "end": current_end, "limit": 200},
+            params={
+                "category": "linear",
+                "symbol": sym,
+                "interval": interval,
+                "start": start_ms,
+                "end": current_end,
+                "limit": 200,
+            },
             timeout=30,
         )
         resp.raise_for_status()
@@ -1014,9 +1159,17 @@ def _fetch_candles_bybit(
         return _empty(_CANDLE_SCHEMA)
 
     # Bybit kline: [startTime, open, high, low, close, volume, turnover]
-    rows = [{"ts": int(c[0]), "o": float(c[1]), "h": float(c[2]),
-             "l": float(c[3]), "c": float(c[4]), "v": float(c[5])}
-            for c in all_data]
+    rows = [
+        {
+            "ts": int(c[0]),
+            "o": float(c[1]),
+            "h": float(c[2]),
+            "l": float(c[3]),
+            "c": float(c[4]),
+            "v": float(c[5]),
+        }
+        for c in all_data
+    ]
     df = pl.DataFrame(rows)
     df = df.with_columns(
         _epoch_ms_to_dt("ts").alias("timestamp"),
@@ -1034,7 +1187,12 @@ def _fetch_oi_bybit(coin: str) -> pl.DataFrame:
 
     resp = requests.get(
         f"{BYBIT_API}/market/open-interest",
-        params={"category": "linear", "symbol": sym, "intervalTime": "5min", "limit": 1},
+        params={
+            "category": "linear",
+            "symbol": sym,
+            "intervalTime": "5min",
+            "limit": 1,
+        },
         timeout=30,
     )
     resp.raise_for_status()
@@ -1044,12 +1202,16 @@ def _fetch_oi_bybit(coin: str) -> pl.DataFrame:
         return _empty(_OI_SCHEMA)
 
     now = datetime.now(timezone.utc)
-    return pl.DataFrame([{
-        "timestamp": now,
-        "venue": "bybit",
-        "coin": coin,
-        "oi_usd": float(data[0].get("openInterest", 0)),
-    }]).cast({"timestamp": pl.Datetime("us", "UTC")})
+    return pl.DataFrame(
+        [
+            {
+                "timestamp": now,
+                "venue": "bybit",
+                "coin": coin,
+                "oi_usd": float(data[0].get("openInterest", 0)),
+            }
+        ]
+    ).cast({"timestamp": pl.Datetime("us", "UTC")})
 
 
 def _fetch_liquidations_bybit(coin: str, days: int = 30) -> pl.DataFrame:
@@ -1075,6 +1237,7 @@ def _fetch_liquidations_bybit(coin: str, days: int = 30) -> pl.DataFrame:
 # dYdX v4 (no auth, works from US)
 # ═══════════════════════════════════════════════════════════════════════
 
+
 def _fetch_funding_dydx(coin: str, days: int = 90) -> pl.DataFrame:
     """Fetch historical funding rates from dYdX v4."""
     sym = DYDX_SYMBOLS.get(coin)
@@ -1096,7 +1259,9 @@ def _fetch_funding_dydx(coin: str, days: int = 90) -> pl.DataFrame:
         all_data.extend(records)
         oldest = records[-1].get("effectiveAt", "")
         try:
-            oldest_ts = datetime.fromisoformat(oldest.replace("Z", "+00:00")).timestamp()
+            oldest_ts = datetime.fromisoformat(
+                oldest.replace("Z", "+00:00")
+            ).timestamp()
         except (ValueError, TypeError):
             break
         if oldest_ts < cutoff:
@@ -1114,23 +1279,35 @@ def _fetch_funding_dydx(coin: str, days: int = 90) -> pl.DataFrame:
             ts = datetime.fromisoformat(r["effectiveAt"].replace("Z", "+00:00"))
         except (ValueError, TypeError, KeyError):
             continue
-        rows.append({
-            "timestamp": ts,
-            "funding_rate": float(r.get("rate", 0)),
-            "venue": "dydx",
-            "coin": coin,
-        })
+        rows.append(
+            {
+                "timestamp": ts,
+                "funding_rate": float(r.get("rate", 0)),
+                "venue": "dydx",
+                "coin": coin,
+            }
+        )
     if not rows:
         return _empty(_FUNDING_SCHEMA)
 
     df = pl.DataFrame(rows).cast({"timestamp": pl.Datetime("us", "UTC")})
-    df = df.filter(pl.col("timestamp") >= pl.lit(datetime.fromtimestamp(cutoff, tz=timezone.utc)))
-    df = df.select("timestamp", "venue", "coin", "funding_rate").unique(subset=["timestamp"]).sort("timestamp")
+    df = df.filter(
+        pl.col("timestamp") >= pl.lit(datetime.fromtimestamp(cutoff, tz=timezone.utc))
+    )
+    df = (
+        df.select("timestamp", "venue", "coin", "funding_rate")
+        .unique(subset=["timestamp"])
+        .sort("timestamp")
+    )
     # dYdX has 1h funding epochs — aggregate to 8h to match other venues
     df = df.with_columns(pl.col("timestamp").dt.truncate("8h").alias("period"))
-    df = df.group_by("period").agg(
-        pl.col("funding_rate").sum(),
-    ).rename({"period": "timestamp"})
+    df = (
+        df.group_by("period")
+        .agg(
+            pl.col("funding_rate").sum(),
+        )
+        .rename({"period": "timestamp"})
+    )
     df = df.with_columns(
         pl.lit("dydx").alias("venue"),
         pl.lit(coin).alias("coin"),
@@ -1139,7 +1316,9 @@ def _fetch_funding_dydx(coin: str, days: int = 90) -> pl.DataFrame:
 
 
 def _fetch_candles_dydx(
-    coin: str, interval: str = "1HOUR", days: int = 90,
+    coin: str,
+    interval: str = "1HOUR",
+    days: int = 90,
 ) -> pl.DataFrame:
     """Fetch candles from dYdX v4."""
     sym = DYDX_SYMBOLS.get(coin)
@@ -1166,12 +1345,16 @@ def _fetch_candles_dydx(
             continue
         if ts.timestamp() < cutoff:
             continue
-        rows.append({
-            "timestamp": ts,
-            "o": float(c.get("open", 0)), "h": float(c.get("high", 0)),
-            "l": float(c.get("low", 0)), "c": float(c.get("close", 0)),
-            "v": float(c.get("baseTokenVolume", 0)),
-        })
+        rows.append(
+            {
+                "timestamp": ts,
+                "o": float(c.get("open", 0)),
+                "h": float(c.get("high", 0)),
+                "l": float(c.get("low", 0)),
+                "c": float(c.get("close", 0)),
+                "v": float(c.get("baseTokenVolume", 0)),
+            }
+        )
     if not rows:
         return _empty(_CANDLE_SCHEMA)
 
@@ -1191,7 +1374,8 @@ def _fetch_oi_dydx(coin: str) -> pl.DataFrame:
 
     resp = requests.get(
         f"{DYDX_API}/perpetualMarkets",
-        params={"ticker": sym}, timeout=30,
+        params={"ticker": sym},
+        timeout=30,
     )
     resp.raise_for_status()
     body = resp.json()
@@ -1203,17 +1387,22 @@ def _fetch_oi_dydx(coin: str) -> pl.DataFrame:
     now = datetime.now(timezone.utc)
     oi = float(info.get("openInterest", 0))
     price = float(info.get("oraclePrice", 0))
-    return pl.DataFrame([{
-        "timestamp": now,
-        "venue": "dydx",
-        "coin": coin,
-        "oi_usd": oi * price,
-    }]).cast({"timestamp": pl.Datetime("us", "UTC")})
+    return pl.DataFrame(
+        [
+            {
+                "timestamp": now,
+                "venue": "dydx",
+                "coin": coin,
+                "oi_usd": oi * price,
+            }
+        ]
+    ).cast({"timestamp": pl.Datetime("us", "UTC")})
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # Aggregators — dispatch to all venues, concat results
 # ═══════════════════════════════════════════════════════════════════════
+
 
 def fetch_funding_rates(
     coins: list[str] | None = None,
@@ -1289,7 +1478,10 @@ def fetch_candles(
 
 
 def _dispatch_candles(
-    venue: str, coin: str, interval: str, days: int,
+    venue: str,
+    coin: str,
+    interval: str,
+    days: int,
 ) -> pl.DataFrame | None:
     if venue == "hyperliquid":
         return _fetch_candles_0xa(coin, "hyperliquid", "hyperliquid", interval, days)
@@ -1310,8 +1502,13 @@ def _dispatch_candles(
         return _fetch_candles_bybit(coin, bybit_interval, days)
     elif venue == "dydx":
         # dYdX uses "1HOUR", "4HOURS", "1DAY"
-        dydx_map = {"1h": "1HOUR", "4h": "4HOURS", "1d": "1DAY",
-                     "15m": "15MINS", "5m": "5MINS"}
+        dydx_map = {
+            "1h": "1HOUR",
+            "4h": "4HOURS",
+            "1d": "1DAY",
+            "15m": "15MINS",
+            "5m": "5MINS",
+        }
         dydx_interval = dydx_map.get(interval.lower(), "1HOUR")
         return _fetch_candles_dydx(coin, dydx_interval, days)
     return None

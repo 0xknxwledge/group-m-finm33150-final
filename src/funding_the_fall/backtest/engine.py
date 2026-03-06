@@ -29,11 +29,11 @@ class Trade:
     timestamp: pd.Timestamp
     coin: str
     venue: str
-    side: str                 # "long" or "short"
+    side: str  # "long" or "short"
     notional_usd: float
     price: float
-    fee_usd: float            # transaction cost (spread + impact)
-    strategy: str             # "carry" or "cascade"
+    fee_usd: float  # transaction cost (spread + impact)
+    strategy: str  # "carry" or "cascade"
 
 
 @dataclass
@@ -45,7 +45,7 @@ class PortfolioState:
     gross_leverage: float
     net_delta_pct: float
     n_positions: int
-    positions: dict           # {(coin, venue): notional_usd}
+    positions: dict  # {(coin, venue): notional_usd}
     cumulative_funding: float
     cumulative_trading_costs: float
 
@@ -66,9 +66,7 @@ class BacktestResult:
         return pd.DataFrame([t.__dict__ for t in self.trades])
 
     def nav_series(self) -> pd.Series:
-        return pd.Series(
-            {s.timestamp: s.nav for s in self.portfolio_states}
-        )
+        return pd.Series({s.timestamp: s.nav for s in self.portfolio_states})
 
 
 def run_backtest(

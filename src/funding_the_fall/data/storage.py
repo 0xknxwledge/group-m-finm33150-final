@@ -22,6 +22,7 @@ def _ensure_dir() -> None:
 
 # ── Pandas helpers (notebook compat) ──
 
+
 def _save_parquet_pd(df: pd.DataFrame, name: str) -> Path:
     """Save a pandas DataFrame to data/{name}.parquet."""
     _ensure_dir()
@@ -45,6 +46,7 @@ load_parquet = _load_parquet_pd
 
 # ── Polars (primary) ──
 
+
 def save_parquet_pl(df: pl.DataFrame, name: str) -> Path:
     """Save a polars DataFrame to data/{name}.parquet."""
     _ensure_dir()
@@ -62,6 +64,7 @@ def load_parquet_pl(name: str) -> pl.DataFrame:
 
 
 # ── Typed loaders (polars) ──
+
 
 def load_funding() -> pl.DataFrame:
     """Load the unified funding rate dataset."""

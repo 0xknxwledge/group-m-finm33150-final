@@ -24,9 +24,9 @@ class PositionTarget:
     timestamp: pd.Timestamp
     coin: str
     venue: str
-    side: str               # "long" or "short"
-    notional_usd: float     # target notional exposure
-    strategy: str           # "carry" or "cascade"
+    side: str  # "long" or "short"
+    notional_usd: float  # target notional exposure
+    strategy: str  # "carry" or "cascade"
 
 
 def allocate_positions(

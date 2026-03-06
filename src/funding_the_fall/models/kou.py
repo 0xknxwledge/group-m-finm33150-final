@@ -38,12 +38,12 @@ from numpy.typing import NDArray
 class KouParams:
     """Fitted Kou double-exponential jump-diffusion parameters."""
 
-    sigma: float       # diffusion volatility (per period)
-    lam: float         # jump intensity (jumps per period)
-    p: float           # probability jump is positive (0 < p < 1)
-    eta1: float        # positive jump rate (η₁ > 1)
-    eta2: float        # negative jump rate (η₂ > 0)
-    mu: float          # drift (per period)
+    sigma: float  # diffusion volatility (per period)
+    lam: float  # jump intensity (jumps per period)
+    p: float  # probability jump is positive (0 < p < 1)
+    eta1: float  # positive jump rate (η₁ > 1)
+    eta2: float  # negative jump rate (η₂ > 0)
+    mu: float  # drift (per period)
     log_likelihood: float = 0.0
     aic: float = 0.0
     bic: float = 0.0

@@ -101,6 +101,7 @@ AAVE_V3_POOL_ABI_FRAGMENT = [
 
 # ── RPC helpers ──
 
+
 def _rpc_call(method: str, params: list[Any], retries: int = 5) -> Any:
     """Send a JSON-RPC call to HyperEVM with retry on rate limit."""
     for attempt in range(retries):
@@ -138,6 +139,7 @@ def _get_block_timestamp(block_num: int, cache: dict[int, int]) -> int:
 
 
 # ── Event log decoding ──
+
 
 def _addr_from_topic(topic: str) -> str:
     """Extract a 20-byte address from a 32-byte hex topic."""
@@ -238,13 +240,16 @@ def _decode_log(log: dict) -> dict | None:
             "collateral_asset": _addr_from_topic(topics[1]),
             "user": _addr_from_topic(topics[3]),  # liquidated borrower
             "amount": _uint256_from_hex(data_hex, 0),  # debtToCover
-            "collateral_amount": _uint256_from_hex(data_hex, 1),  # liquidatedCollateralAmount
+            "collateral_amount": _uint256_from_hex(
+                data_hex, 1
+            ),  # liquidatedCollateralAmount
         }
 
     return None
 
 
 # ── Event scanning ──
+
 
 def scan_hyperlend_events(
     from_block: int = 0,
@@ -273,7 +278,9 @@ def scan_hyperlend_events(
         if not existing.is_empty():
             from_block = existing["block_number"].max() + 1
             existing_rows = existing.to_dicts()
-            logger.info(f"Resuming scan from block {from_block} ({len(existing_rows)} existing events)")
+            logger.info(
+                f"Resuming scan from block {from_block} ({len(existing_rows)} existing events)"
+            )
 
     rows: list[dict] = []
     block_ts_cache: dict[int, int] = {}
@@ -286,12 +293,17 @@ def scan_hyperlend_events(
     while cursor <= to_block:
         end = min(cursor + chunk_size - 1, to_block)
         try:
-            logs = _rpc_call("eth_getLogs", [{
-                "address": HYPERLEND_POOL,
-                "topics": [ALL_EVENT_TOPICS],
-                "fromBlock": hex(cursor),
-                "toBlock": hex(end),
-            }])
+            logs = _rpc_call(
+                "eth_getLogs",
+                [
+                    {
+                        "address": HYPERLEND_POOL,
+                        "topics": [ALL_EVENT_TOPICS],
+                        "fromBlock": hex(cursor),
+                        "toBlock": hex(end),
+                    }
+                ],
+            )
         except RuntimeError as e:
             if "rate limited" in str(e).lower():
                 logger.warning(f"Rate limited at block {cursor}, backing off...")
@@ -307,20 +319,24 @@ def scan_hyperlend_events(
         cursor = end + 1
         chunk_idx += 1
         if chunk_idx % 100 == 0:
-            logger.info(f"  chunk {chunk_idx}/{total_chunks}, {len(rows)} events so far")
+            logger.info(
+                f"  chunk {chunk_idx}/{total_chunks}, {len(rows)} events so far"
+            )
         time.sleep(sleep_between)
 
     if not rows and not existing_rows:
-        return pl.DataFrame(schema={
-            "block_number": pl.Int64,
-            "timestamp": pl.Datetime("us", "UTC"),
-            "event_type": pl.Utf8,
-            "reserve": pl.Utf8,
-            "user": pl.Utf8,
-            "amount": pl.Int64,
-            "collateral_asset": pl.Utf8,
-            "collateral_amount": pl.Int64,
-        })
+        return pl.DataFrame(
+            schema={
+                "block_number": pl.Int64,
+                "timestamp": pl.Datetime("us", "UTC"),
+                "event_type": pl.Utf8,
+                "reserve": pl.Utf8,
+                "user": pl.Utf8,
+                "amount": pl.Int64,
+                "collateral_asset": pl.Utf8,
+                "collateral_amount": pl.Int64,
+            }
+        )
 
     # Resolve block timestamps for new rows
     unique_blocks = {r["block_number"] for r in rows}
@@ -354,6 +370,7 @@ def scan_hyperlend_events(
 
 # ── Position replay ──
 
+
 def replay_positions(
     events_df: pl.DataFrame,
     prices_df: pl.DataFrame,
@@ -373,14 +390,16 @@ def replay_positions(
        liquidation_threshold]
     """
     if events_df.is_empty():
-        return pl.DataFrame(schema={
-            "timestamp": pl.Datetime("us", "UTC"),
-            "borrower": pl.Utf8,
-            "collateral_usd": pl.Float64,
-            "debt_usd": pl.Float64,
-            "health_factor": pl.Float64,
-            "liquidation_threshold": pl.Float64,
-        })
+        return pl.DataFrame(
+            schema={
+                "timestamp": pl.Datetime("us", "UTC"),
+                "borrower": pl.Utf8,
+                "collateral_usd": pl.Float64,
+                "debt_usd": pl.Float64,
+                "health_factor": pl.Float64,
+                "liquidation_threshold": pl.Float64,
+            }
+        )
 
     events = events_df.sort("block_number").to_dicts()
 
@@ -453,7 +472,9 @@ def replay_positions(
                 coll_amount = ev.get("collateral_amount", 0)
                 if coll_asset and coll_amount:
                     coll_bal = _get(user, coll_asset)
-                    coll_bal["collateral"] = max(0, coll_bal["collateral"] - coll_amount)
+                    coll_bal["collateral"] = max(
+                        0, coll_bal["collateral"] - coll_amount
+                    )
             ev_idx += 1
 
         # Get prices at this snapshot (nearest available)
@@ -466,36 +487,46 @@ def replay_positions(
                 continue
             price = prices_at_snap.get(reserve, 0.0)
             decimals = _get_reserve_decimals(reserve)
-            scale = 10 ** decimals
+            scale = 10**decimals
 
             if user not in borrower_totals:
                 borrower_totals[user] = {"collateral_usd": 0.0, "debt_usd": 0.0}
-            borrower_totals[user]["collateral_usd"] += (bal["collateral"] / scale) * price
+            borrower_totals[user]["collateral_usd"] += (
+                bal["collateral"] / scale
+            ) * price
             borrower_totals[user]["debt_usd"] += (bal["debt"] / scale) * price
 
         for borrower, totals in borrower_totals.items():
             if totals["debt_usd"] < 10:
                 continue
             liq_thresh = 0.825  # weighted average, approximation
-            hf = (totals["collateral_usd"] * liq_thresh) / totals["debt_usd"] if totals["debt_usd"] > 0 else float("inf")
-            snapshot_rows.append({
-                "timestamp": snap_t,
-                "borrower": borrower,
-                "collateral_usd": totals["collateral_usd"],
-                "debt_usd": totals["debt_usd"],
-                "health_factor": hf,
-                "liquidation_threshold": liq_thresh,
-            })
+            hf = (
+                (totals["collateral_usd"] * liq_thresh) / totals["debt_usd"]
+                if totals["debt_usd"] > 0
+                else float("inf")
+            )
+            snapshot_rows.append(
+                {
+                    "timestamp": snap_t,
+                    "borrower": borrower,
+                    "collateral_usd": totals["collateral_usd"],
+                    "debt_usd": totals["debt_usd"],
+                    "health_factor": hf,
+                    "liquidation_threshold": liq_thresh,
+                }
+            )
 
     if not snapshot_rows:
-        return pl.DataFrame(schema={
-            "timestamp": pl.Datetime("us", "UTC"),
-            "borrower": pl.Utf8,
-            "collateral_usd": pl.Float64,
-            "debt_usd": pl.Float64,
-            "health_factor": pl.Float64,
-            "liquidation_threshold": pl.Float64,
-        })
+        return pl.DataFrame(
+            schema={
+                "timestamp": pl.Datetime("us", "UTC"),
+                "borrower": pl.Utf8,
+                "collateral_usd": pl.Float64,
+                "debt_usd": pl.Float64,
+                "health_factor": pl.Float64,
+                "liquidation_threshold": pl.Float64,
+            }
+        )
 
     result = pl.DataFrame(snapshot_rows)
 
@@ -520,13 +551,13 @@ def _get_prices_at(
     if filtered.is_empty():
         # Fall back to earliest available prices
         filtered = prices_df
-    latest = filtered.group_by("reserve").agg(
-        pl.all().sort_by("timestamp").last()
+    latest = filtered.group_by("reserve").agg(pl.all().sort_by("timestamp").last())
+    return dict(
+        zip(
+            latest["reserve"].to_list(),
+            latest["price_usd"].to_list(),
+        )
     )
-    return dict(zip(
-        latest["reserve"].to_list(),
-        latest["price_usd"].to_list(),
-    ))
 
 
 def _get_reserve_decimals(reserve: str) -> int:
@@ -539,6 +570,7 @@ def _get_reserve_decimals(reserve: str) -> int:
 
 
 # ── Reserve price history (for position replay) ──
+
 
 def fetch_reserve_prices(days: int = 90) -> pl.DataFrame:
     """Fetch historical prices for lending reserves via 0xArchive.
@@ -571,11 +603,13 @@ def fetch_reserve_prices(days: int = 90) -> pl.DataFrame:
             frames.append(stable)
 
     if not frames:
-        return pl.DataFrame(schema={
-            "timestamp": pl.Datetime("us", "UTC"),
-            "reserve": pl.Utf8,
-            "price_usd": pl.Float64,
-        })
+        return pl.DataFrame(
+            schema={
+                "timestamp": pl.Datetime("us", "UTC"),
+                "reserve": pl.Utf8,
+                "price_usd": pl.Float64,
+            }
+        )
 
     result = pl.concat(frames).sort("timestamp")
 
@@ -614,12 +648,17 @@ def discover_hyperlend_borrowers(
     while start <= latest_block and len(borrowers) < max_borrowers:
         end = min(start + chunk_size - 1, latest_block)
         try:
-            logs = _rpc_call("eth_getLogs", [{
-                "address": HYPERLEND_POOL,
-                "topics": [EVENT_TOPICS["Borrow"]],
-                "fromBlock": hex(start),
-                "toBlock": hex(end),
-            }])
+            logs = _rpc_call(
+                "eth_getLogs",
+                [
+                    {
+                        "address": HYPERLEND_POOL,
+                        "topics": [EVENT_TOPICS["Borrow"]],
+                        "fromBlock": hex(start),
+                        "toBlock": hex(end),
+                    }
+                ],
+            )
         except RuntimeError as e:
             if "rate limited" in str(e).lower():
                 time.sleep(2)
@@ -653,15 +692,19 @@ def fetch_hyperlend_positions(
     rows: list[dict] = []
     now = pl.Series([0]).cast(pl.Datetime("us", "UTC"))[0]  # placeholder
     import datetime as _dt
+
     now = _dt.datetime.now(_dt.timezone.utc)
 
     for addr in borrowers:
         calldata = _encode_call(GET_USER_ACCOUNT_DATA_SEL, addr)
         try:
-            raw = _rpc_call("eth_call", [
-                {"to": HYPERLEND_POOL, "data": calldata},
-                "latest",
-            ])
+            raw = _rpc_call(
+                "eth_call",
+                [
+                    {"to": HYPERLEND_POOL, "data": calldata},
+                    "latest",
+                ],
+            )
         except Exception:
             continue
 
@@ -678,30 +721,34 @@ def fetch_hyperlend_positions(
         if total_debt < 10:
             continue
 
-        rows.append({
-            "timestamp": now,
-            "protocol": "hyperlend",
-            "chain": "hyperevm",
-            "borrower": addr,
-            "collateral_usd": total_collateral,
-            "debt_usd": total_debt,
-            "health_factor": health_factor,
-            "liquidation_threshold": liq_threshold,
-            "ltv": ltv,
-        })
+        rows.append(
+            {
+                "timestamp": now,
+                "protocol": "hyperlend",
+                "chain": "hyperevm",
+                "borrower": addr,
+                "collateral_usd": total_collateral,
+                "debt_usd": total_debt,
+                "health_factor": health_factor,
+                "liquidation_threshold": liq_threshold,
+                "ltv": ltv,
+            }
+        )
 
     if not rows:
-        return pl.DataFrame(schema={
-            "timestamp": pl.Datetime("us", "UTC"),
-            "protocol": pl.Utf8,
-            "chain": pl.Utf8,
-            "borrower": pl.Utf8,
-            "collateral_usd": pl.Float64,
-            "debt_usd": pl.Float64,
-            "health_factor": pl.Float64,
-            "liquidation_threshold": pl.Float64,
-            "ltv": pl.Float64,
-        })
+        return pl.DataFrame(
+            schema={
+                "timestamp": pl.Datetime("us", "UTC"),
+                "protocol": pl.Utf8,
+                "chain": pl.Utf8,
+                "borrower": pl.Utf8,
+                "collateral_usd": pl.Float64,
+                "debt_usd": pl.Float64,
+                "health_factor": pl.Float64,
+                "liquidation_threshold": pl.Float64,
+                "ltv": pl.Float64,
+            }
+        )
     return pl.DataFrame(rows)
 
 
@@ -721,11 +768,13 @@ def fetch_tvl_history(protocol: str) -> pl.DataFrame:
 
     tvl_series = data.get("tvl", [])
     if not tvl_series:
-        return pl.DataFrame(schema={
-            "timestamp": pl.Datetime("us", "UTC"),
-            "protocol": pl.Utf8,
-            "tvl_usd": pl.Float64,
-        })
+        return pl.DataFrame(
+            schema={
+                "timestamp": pl.Datetime("us", "UTC"),
+                "protocol": pl.Utf8,
+                "tvl_usd": pl.Float64,
+            }
+        )
 
     df = pl.DataFrame(tvl_series)
     df = df.with_columns(
@@ -738,6 +787,7 @@ def fetch_tvl_history(protocol: str) -> pl.DataFrame:
 
 # ── Unified interface ──
 
+
 def fetch_all_lending_positions() -> pl.DataFrame:
     """Fetch current positions from all lending protocols (HyperLend only).
 
@@ -748,14 +798,16 @@ def fetch_all_lending_positions() -> pl.DataFrame:
     try:
         return fetch_hyperlend_positions()
     except Exception:
-        return pl.DataFrame(schema={
-            "timestamp": pl.Datetime("us", "UTC"),
-            "protocol": pl.Utf8,
-            "chain": pl.Utf8,
-            "borrower": pl.Utf8,
-            "collateral_usd": pl.Float64,
-            "debt_usd": pl.Float64,
-            "health_factor": pl.Float64,
-            "liquidation_threshold": pl.Float64,
-            "ltv": pl.Float64,
-        })
+        return pl.DataFrame(
+            schema={
+                "timestamp": pl.Datetime("us", "UTC"),
+                "protocol": pl.Utf8,
+                "chain": pl.Utf8,
+                "borrower": pl.Utf8,
+                "collateral_usd": pl.Float64,
+                "debt_usd": pl.Float64,
+                "health_factor": pl.Float64,
+                "liquidation_threshold": pl.Float64,
+                "ltv": pl.Float64,
+            }
+        )

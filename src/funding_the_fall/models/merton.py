@@ -25,11 +25,11 @@ from numpy.typing import NDArray
 class MertonParams:
     """Fitted Merton jump-diffusion parameters."""
 
-    sigma: float       # diffusion volatility (per period)
-    lam: float         # jump intensity (jumps per period)
-    mu_j: float        # mean jump size (log)
-    sigma_j: float     # jump size volatility (log)
-    mu: float          # drift (per period)
+    sigma: float  # diffusion volatility (per period)
+    lam: float  # jump intensity (jumps per period)
+    mu_j: float  # mean jump size (log)
+    sigma_j: float  # jump size volatility (log)
+    mu: float  # drift (per period)
     log_likelihood: float = 0.0
     aic: float = 0.0
     bic: float = 0.0

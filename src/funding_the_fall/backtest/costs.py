@@ -33,9 +33,9 @@ from dataclasses import dataclass
 class TransactionCostModel:
     """Almgren-Chriss linear impact transaction cost model."""
 
-    epsilon: float = 0.0003    # half spread (3 bps default)
-    eta: float = 0.0001        # temporary impact coefficient
-    gamma: float = 0.00001     # permanent impact coefficient
+    epsilon: float = 0.0003  # half spread (3 bps default)
+    eta: float = 0.0001  # temporary impact coefficient
+    gamma: float = 0.00001  # permanent impact coefficient
 
     def fixed_cost(self, notional_usd: float) -> float:
         """Fixed cost component (spread crossing): ε × |notional|."""
@@ -43,24 +43,23 @@ class TransactionCostModel:
 
     def temporary_impact(self, notional_usd: float, tau: float = 1.0) -> float:
         """Temporary impact cost: (η/τ) × notional²."""
-        return (self.eta / tau) * notional_usd ** 2
+        return (self.eta / tau) * notional_usd**2
 
     def permanent_impact(self, notional_usd: float) -> float:
         """Permanent impact cost: ½ γ × notional²."""
-        return 0.5 * self.gamma * notional_usd ** 2
+        return 0.5 * self.gamma * notional_usd**2
 
     def total_cost(self, notional_usd: float, tau: float = 1.0) -> float:
         """Total execution cost for a single trade.
 
         Returns cost in USD (always positive).
         """
-        return (
-            self.fixed_cost(notional_usd)
-            + self.temporary_impact(notional_usd, tau)
-        )
+        return self.fixed_cost(notional_usd) + self.temporary_impact(notional_usd, tau)
 
     def implementation_shortfall(
-        self, trade_notionals: list[float], tau: float = 1.0,
+        self,
+        trade_notionals: list[float],
+        tau: float = 1.0,
     ) -> float:
         """Expected implementation shortfall for a sequence of trades.
 
@@ -69,18 +68,18 @@ class TransactionCostModel:
         """
         total_quantity = sum(trade_notionals)
         eta_tilde = self.eta - 0.5 * self.gamma * tau
-        permanent = 0.5 * self.gamma * total_quantity ** 2
+        permanent = 0.5 * self.gamma * total_quantity**2
         fixed = self.epsilon * sum(abs(n) for n in trade_notionals)
-        temporary = (eta_tilde / tau) * sum(n ** 2 for n in trade_notionals)
+        temporary = (eta_tilde / tau) * sum(n**2 for n in trade_notionals)
         return permanent + fixed + temporary
 
 
 # ── Per-venue fee schedules (taker fees) ──
 VENUE_FEES: dict[str, float] = {
-    "hyperliquid": 0.00035,   # 3.5 bps taker
-    "binance": 0.0004,        # 4 bps taker (VIP0)
-    "bybit": 0.00055,         # 5.5 bps taker
-    "dydx": 0.0005,           # 5 bps taker
+    "hyperliquid": 0.00035,  # 3.5 bps taker
+    "binance": 0.0004,  # 4 bps taker (VIP0)
+    "bybit": 0.00055,  # 5.5 bps taker
+    "dydx": 0.0005,  # 5 bps taker
 }
 
 

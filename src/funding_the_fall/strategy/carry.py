@@ -27,10 +27,10 @@ class CarrySignal:
 
     timestamp: pd.Timestamp
     coin: str
-    long_venue: str         # venue with lower funding rate (we receive)
-    short_venue: str        # venue with higher funding rate (we pay less)
-    spread: float           # annualized spread in decimal (e.g. 0.15 = 15%)
-    action: str             # "enter" or "exit"
+    long_venue: str  # venue with lower funding rate (we receive)
+    short_venue: str  # venue with higher funding rate (we pay less)
+    spread: float  # annualized spread in decimal (e.g. 0.15 = 15%)
+    action: str  # "enter" or "exit"
 
 
 @dataclass
@@ -40,9 +40,9 @@ class CarryParams:
     coin: str
     long_venue: str
     short_venue: str
-    entry_spread: float          # min annualized spread to enter
-    exit_spread: float           # spread level to exit
-    max_holding_epochs: int      # max 8h epochs before forced exit
+    entry_spread: float  # min annualized spread to enter
+    exit_spread: float  # spread level to exit
+    max_holding_epochs: int  # max 8h epochs before forced exit
 
 
 @dataclass
@@ -51,8 +51,8 @@ class GridSearchResult:
 
     params: CarryParams
     n_trades: int
-    total_carry_pnl: float       # cumulative funding collected
-    sharpe: float                # annualized Sharpe of carry PnL
+    total_carry_pnl: float  # cumulative funding collected
+    sharpe: float  # annualized Sharpe of carry PnL
     avg_holding_epochs: float
     win_rate: float
 
