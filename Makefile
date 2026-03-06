@@ -1,4 +1,4 @@
-.PHONY: sync test lab lint clean
+.PHONY: sync test lab lint format clean
 
 sync:
 	uv sync
@@ -11,6 +11,9 @@ lab:
 
 lint:
 	uv run ruff check src/ tests/
+
+format:
+	uv run ruff format src/ tests/
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +

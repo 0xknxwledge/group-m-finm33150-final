@@ -8,6 +8,8 @@ from funding_the_fall.models.cascade import (
     cascade_risk_signal,
     build_positions_from_oi,
     compute_amplification_curve,
+    sensitivity_to_leverage,
+    sensitivity_to_depth,
 )
 
 __all__ = [
@@ -21,4 +23,6 @@ __all__ = [
     "cascade_risk_signal",
     "build_positions_from_oi",
     "compute_amplification_curve",
+    "sensitivity_to_leverage",
+    "sensitivity_to_depth",
 ]

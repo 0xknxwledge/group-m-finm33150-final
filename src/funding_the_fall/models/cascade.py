@@ -240,3 +240,49 @@ def build_positions_from_oi(
             )
         )
     return positions
+
+
+def sensitivity_to_leverage(
+    oi_df: pl.DataFrame,
+    leverages: list[float] | None = None,
+    shocks: NDArray[np.floating] | None = None,
+    **cascade_kwargs,
+) -> dict[float, list[CascadeResult]]:
+    """Amplification curves across leverage assumptions.
+
+    Default leverages: [3, 5, 10, 20].
+    """
+    if leverages is None:
+        leverages = [3.0, 5.0, 10.0, 20.0]
+    return {
+        lev: compute_amplification_curve(
+            build_positions_from_oi(oi_df, leverage=lev),
+            current_price=1.0,
+            shocks=shocks,
+            **cascade_kwargs,
+        )
+        for lev in leverages
+    }
+
+
+def sensitivity_to_depth(
+    positions: list[Position],
+    depths_usd: list[float] | None = None,
+    shocks: NDArray[np.floating] | None = None,
+    current_price: float = 1.0,
+) -> dict[float, list[CascadeResult]]:
+    """Amplification curves across orderbook depth assumptions.
+
+    Default depths: [1M, 5M, 10M, 50M].
+    """
+    if depths_usd is None:
+        depths_usd = [1e6, 5e6, 10e6, 50e6]
+    return {
+        d: compute_amplification_curve(
+            positions,
+            current_price,
+            shocks=shocks,
+            orderbook_depth_usd=d,
+        )
+        for d in depths_usd
+    }

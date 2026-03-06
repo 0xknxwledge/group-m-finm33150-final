@@ -56,18 +56,18 @@ ALL_EVENT_TOPICS = list(EVENT_TOPICS.values())
 # Decimals and liquidation thresholds from getReserveData / Aave docs.
 
 RESERVES: dict[str, dict[str, Any]] = {
-    # address → {symbol, decimals, liq_threshold}
-    "0x0d01dc56dcaaca66ad901c959b4011ec": {
+    # Full 20-byte addresses (40 hex chars) matching _addr_from_topic output.
+    "0x000000000d01dc56dcaaca66ad901c959b4011ec": {
         "symbol": "USDC",
         "decimals": 6,
         "liq_threshold": 0.85,
     },
-    "0xb8ce59fc3717ada4c02eadf4e3bc5c75": {
+    "0x00000000b8ce59fc3717ada4c02eadf4e3bc5c75": {
         "symbol": "USDT",
         "decimals": 6,
         "liq_threshold": 0.80,
     },
-    "0x2e4df919ac903b3d57a97a1bcc6bfad3": {
+    "0x000000002e4df919ac903b3d57a97a1bcc6bfad3": {
         "symbol": "WETH",
         "decimals": 18,
         "liq_threshold": 0.825,
@@ -324,6 +324,9 @@ def scan_hyperlend_events(
             )
         time.sleep(sleep_between)
 
+    # Collect unique reserve addresses from decoded events
+    RESERVE_ADDRESSES.update(r["reserve"] for r in rows if r.get("reserve"))
+
     if not rows and not existing_rows:
         return pl.DataFrame(
             schema={
@@ -366,6 +369,48 @@ def scan_hyperlend_events(
     logger.info(f"Saved {len(df)} events to {events_path}")
 
     return df
+
+
+def discover_reserves(
+    block_range: int = 5000,
+) -> set[str]:
+    """Scan a small recent block range to discover unique reserve addresses.
+
+    Useful for bootstrapping the RESERVES dict with full 20-byte addresses.
+    """
+    latest_hex = _rpc_call("eth_blockNumber", [])
+    latest_block = int(latest_hex, 16)
+    from_block = max(0, latest_block - block_range)
+
+    reserves: set[str] = set()
+    chunk_size = 999
+    cursor = from_block
+
+    while cursor <= latest_block:
+        end = min(cursor + chunk_size - 1, latest_block)
+        try:
+            logs = _rpc_call(
+                "eth_getLogs",
+                [
+                    {
+                        "address": HYPERLEND_POOL,
+                        "topics": [ALL_EVENT_TOPICS],
+                        "fromBlock": hex(cursor),
+                        "toBlock": hex(end),
+                    }
+                ],
+            )
+        except RuntimeError:
+            cursor = end + 1
+            continue
+        for log in logs:
+            topics = log.get("topics", [])
+            if len(topics) >= 2:
+                reserves.add(_addr_from_topic(topics[1]))
+        cursor = end + 1
+        time.sleep(1.5)
+
+    return reserves
 
 
 # ── Position replay ──
@@ -584,7 +629,7 @@ def fetch_reserve_prices(days: int = 90) -> pl.DataFrame:
 
     if not eth_prices.is_empty():
         eth_df = eth_prices.with_columns(
-            pl.lit("0x2e4df919ac903b3d57a97a1bcc6bfad3").alias("reserve"),
+            pl.lit("0x000000002e4df919ac903b3d57a97a1bcc6bfad3").alias("reserve"),
             pl.col("mark_price").alias("price_usd"),
         ).select("timestamp", "reserve", "price_usd")
         frames.append(eth_df)
@@ -593,8 +638,8 @@ def fetch_reserve_prices(days: int = 90) -> pl.DataFrame:
     if not eth_prices.is_empty():
         ts_col = eth_prices.select("timestamp")
         for addr, sym in [
-            ("0x0d01dc56dcaaca66ad901c959b4011ec", "USDC"),
-            ("0xb8ce59fc3717ada4c02eadf4e3bc5c75", "USDT"),
+            ("0x000000000d01dc56dcaaca66ad901c959b4011ec", "USDC"),
+            ("0x00000000b8ce59fc3717ada4c02eadf4e3bc5c75", "USDT"),
         ]:
             stable = ts_col.with_columns(
                 pl.lit(addr).alias("reserve"),
