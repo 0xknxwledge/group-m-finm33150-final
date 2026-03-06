@@ -3,7 +3,12 @@
 from funding_the_fall.models.merton import calibrate_merton, merton_log_density
 from funding_the_fall.models.kou import calibrate_kou, kou_log_density
 from funding_the_fall.models.compare import compare_models, compare_all_tokens
-from funding_the_fall.models.cascade import simulate_cascade, cascade_risk_signal
+from funding_the_fall.models.cascade import (
+    simulate_cascade,
+    cascade_risk_signal,
+    build_positions_from_oi,
+    compute_amplification_curve,
+)
 
 __all__ = [
     "calibrate_merton",
@@ -14,4 +19,6 @@ __all__ = [
     "compare_all_tokens",
     "simulate_cascade",
     "cascade_risk_signal",
+    "build_positions_from_oi",
+    "compute_amplification_curve",
 ]

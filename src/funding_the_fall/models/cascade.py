@@ -202,7 +202,7 @@ def cascade_risk_signal(
         "risk_score": risk_score,
         "critical_shock": critical_shock if critical_shock != float("inf") else None,
         "amplification_at_5pct": amp_5pct,
-        "signal": risk_score > 0.5,
+        "signal": bool(risk_score > 0.5),
     }
 
 
