@@ -18,7 +18,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import pandas as pd
-import numpy as np
 
 from funding_the_fall.backtest.costs import TransactionCostModel
 

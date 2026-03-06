@@ -179,7 +179,7 @@ class TestCascadeRiskSignal:
         ]
         sig = cascade_risk_signal(safe, 100.0)
         assert sig["risk_score"] == pytest.approx(0.0)
-        assert sig["signal"] == False
+        assert not sig["signal"]
         assert sig["critical_shock"] is None
 
     def test_high_risk(self):
@@ -189,7 +189,7 @@ class TestCascadeRiskSignal:
         ]
         sig = cascade_risk_signal(fragile, 100.0, orderbook_depth_usd=100_000)
         assert sig["risk_score"] > 0.5
-        assert sig["signal"] == True
+        assert sig["signal"]
         assert isinstance(sig["critical_shock"], (float, np.floating))
 
     def test_signal_keys(self):

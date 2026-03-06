@@ -1064,7 +1064,7 @@ def _fetch_liquidations_bybit(coin: str, days: int = 30) -> pl.DataFrame:
         timeout=30,
     )
     resp.raise_for_status()
-    body = resp.json()
+    resp.json()  # validate response
     # Filter for liquidation trades (isBlockTrade or check side)
     # Bybit doesn't have a dedicated liquidation endpoint in v5 public API.
     # Return empty for now — liquidations come from 0xArchive + OKX + Binance.
