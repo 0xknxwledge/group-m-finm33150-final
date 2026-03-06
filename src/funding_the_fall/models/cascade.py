@@ -1,6 +1,6 @@
 """Liquidation cascade simulator.
 
-Owner: John Beecher
+Owner: Antonio Braz
 
 Models the cross-layer liquidation feedback loop across:
   - Perpetual futures (Hyperliquid, $3.4B+ OI)
@@ -13,14 +13,22 @@ Cascade dynamics:
 
 The amplification curve A(δ) maps initial shocks to terminal effective
 shocks. A(δ) > 1 indicates cascade amplification.
+
+Price impact model:
+  Square-root law: Δp/p = sqrt(V / D)
+  where V = forced selling volume, D = orderbook depth.
+  Consistent with Almgren-Chriss (2001) and Jusselin-Rosenbaum (2018).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
+
+# Approximate 1% orderbook depth for major perps on Hyperliquid (USD).
+DEFAULT_DEPTH_USD = 5_000_000.0
 
 
 @dataclass
@@ -42,7 +50,33 @@ class CascadeResult:
     amplification: float           # effective / initial
     rounds: int
     total_debt_liquidated: float
-    liquidations_by_layer: dict[str, float]
+    liquidations_by_layer: dict[str, float] = field(default_factory=dict)
+
+
+def _is_liquidated(pos: Position, price_drop_pct: float) -> bool:
+    """Check whether a position is liquidated after a given price drop.
+
+    After a drop of `price_drop_pct` (as a fraction, e.g. 0.10 for 10%),
+    collateral value shrinks proportionally. Liquidation triggers when
+    the health factor falls below 1:
+
+        HF = (collateral * (1 - drop) * liq_threshold) / debt < 1
+    """
+    shocked_collateral = pos.collateral_usd * (1.0 - price_drop_pct)
+    if pos.debt_usd <= 0:
+        return False
+    health_factor = (shocked_collateral * pos.liquidation_threshold) / pos.debt_usd
+    return health_factor < 1.0
+
+
+def _price_impact(volume_usd: float, depth_usd: float) -> float:
+    """Square-root price impact: Δp/p = sqrt(V / D).
+
+    Bounded at 1.0 (price can't go below zero).
+    """
+    if depth_usd <= 0 or volume_usd <= 0:
+        return 0.0
+    return min(np.sqrt(volume_usd / depth_usd), 1.0)
 
 
 def simulate_cascade(
@@ -58,7 +92,48 @@ def simulate_cascade(
     Price impact of forced selling is modeled using square-root market impact
     (consistent with Almgren-Chriss / Jusselin-Rosenbaum).
     """
-    raise NotImplementedError
+    depth = orderbook_depth_usd or DEFAULT_DEPTH_USD
+    cumulative_drop = initial_shock_pct
+    surviving = list(positions)
+    total_liquidated = 0.0
+    by_layer: dict[str, float] = {}
+
+    rounds_used = 0
+    for round_num in range(1, max_rounds + 1):
+        newly_liquidated: list[Position] = []
+        still_alive: list[Position] = []
+
+        for pos in surviving:
+            if _is_liquidated(pos, cumulative_drop):
+                newly_liquidated.append(pos)
+            else:
+                still_alive.append(pos)
+
+        if not newly_liquidated:
+            break
+
+        rounds_used = round_num
+        forced_volume = 0.0
+        for pos in newly_liquidated:
+            total_liquidated += pos.debt_usd
+            by_layer[pos.layer] = by_layer.get(pos.layer, 0.0) + pos.debt_usd
+            forced_volume += pos.collateral_usd * (1.0 - cumulative_drop)
+
+        additional_drop = _price_impact(forced_volume, depth)
+        cumulative_drop = cumulative_drop + (1.0 - cumulative_drop) * additional_drop
+        cumulative_drop = min(cumulative_drop, 1.0)
+        surviving = still_alive
+
+    amplification = cumulative_drop / initial_shock_pct if initial_shock_pct > 0 else 1.0
+
+    return CascadeResult(
+        initial_shock=initial_shock_pct,
+        effective_shock=cumulative_drop,
+        amplification=amplification,
+        rounds=rounds_used,
+        total_debt_liquidated=total_liquidated,
+        liquidations_by_layer=by_layer,
+    )
 
 
 def compute_amplification_curve(
@@ -94,4 +169,37 @@ def cascade_risk_signal(
       - amplification_at_5pct: A(0.05) — amplification from a 5% shock
       - signal: bool — True if cascade risk is elevated
     """
-    raise NotImplementedError
+    probe_shocks = np.arange(0.005, 0.505, 0.005)
+    results = compute_amplification_curve(
+        positions, current_price, probe_shocks, orderbook_depth_usd,
+    )
+
+    # A(5%) — the headline amplification number
+    amp_5pct = 1.0
+    for r in results:
+        if abs(r.initial_shock - 0.05) < 1e-6:
+            amp_5pct = r.amplification
+            break
+
+    # Critical shock: smallest δ where A(δ) exceeds threshold
+    critical_shock = float("inf")
+    for r in results:
+        if r.amplification >= threshold_amplification:
+            critical_shock = r.initial_shock
+            break
+
+    # Risk score: 0–1 based on how small the critical shock is.
+    # If a 5% shock already triggers threshold amplification → high risk.
+    # If even a 50% shock doesn't → low risk.
+    if critical_shock == float("inf"):
+        risk_score = 0.0
+    else:
+        # Map critical_shock from [0.5, 0.005] → [0, 1]
+        risk_score = max(0.0, min(1.0, 1.0 - (critical_shock - 0.005) / 0.495))
+
+    return {
+        "risk_score": risk_score,
+        "critical_shock": critical_shock if critical_shock != float("inf") else None,
+        "amplification_at_5pct": amp_5pct,
+        "signal": risk_score > 0.5,
+    }

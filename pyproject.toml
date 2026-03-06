@@ -34,3 +34,8 @@ dev = [
     "ruff>=0.14.13",
     "ty>=0.0.20",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that require real parquet data files",
+]
