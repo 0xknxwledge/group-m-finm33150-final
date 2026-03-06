@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+import polars as pl
 from numpy.typing import NDArray
 
 # Approximate 1% orderbook depth for major perps on Hyperliquid (USD).
@@ -203,3 +204,34 @@ def cascade_risk_signal(
         "amplification_at_5pct": amp_5pct,
         "signal": risk_score > 0.5,
     }
+
+
+def build_positions_from_oi(
+    oi_df: pl.DataFrame,
+    leverage: float = 5.0,
+    liq_threshold: float = 1.0,
+    layer: str = "perp",
+) -> list[Position]:
+    """Build Position list from an open-interest DataFrame.
+
+    Takes the latest snapshot per (venue, coin) and derives collateral/debt
+    from the notional OI assuming uniform leverage.
+
+    Expected schema: (timestamp, venue, coin, oi_usd).
+    """
+    latest = oi_df.sort("timestamp").group_by(["venue", "coin"]).last()
+    positions: list[Position] = []
+    for row in latest.iter_rows(named=True):
+        notional = row.get("oi_usd", 0)
+        if notional is None or notional <= 0:
+            continue
+        collateral = notional / leverage
+        positions.append(
+            Position(
+                collateral_usd=collateral,
+                debt_usd=notional - collateral,
+                liquidation_threshold=liq_threshold,
+                layer=layer,
+            )
+        )
+    return positions

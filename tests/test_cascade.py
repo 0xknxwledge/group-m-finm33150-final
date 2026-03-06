@@ -12,6 +12,7 @@ from funding_the_fall.models.cascade import (
     Position,
     _is_liquidated,
     _price_impact,
+    build_positions_from_oi,
     cascade_risk_signal,
     compute_amplification_curve,
     simulate_cascade,
@@ -197,6 +198,76 @@ class TestCascadeRiskSignal:
 
 
 # ---------------------------------------------------------------------------
+# build_positions_from_oi
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPositionsFromOI:
+    @staticmethod
+    def _make_oi_df(
+        timestamps: list[str],
+        venues: list[str],
+        coins: list[str],
+        oi_values: list[float],
+    ):
+        import polars as pl
+
+        return pl.DataFrame({
+            "timestamp": timestamps,
+            "venue": venues,
+            "coin": coins,
+            "oi_usd": oi_values,
+        }).with_columns(pl.col("timestamp").str.to_datetime(time_zone="UTC"))
+
+    def test_synthetic_df(self):
+        df = self._make_oi_df(
+            timestamps=["2025-01-01T00:00:00", "2025-01-02T00:00:00", "2025-01-01T00:00:00"],
+            venues=["binance", "binance", "bybit"],
+            coins=["BTC", "BTC", "ETH"],
+            oi_values=[1_000_000.0, 2_000_000.0, 500_000.0],
+        )
+        positions = build_positions_from_oi(df, leverage=5.0)
+        assert len(positions) == 2  # latest BTC + ETH
+        total_debt = sum(p.debt_usd for p in positions)
+        # 2_000_000 * 4/5 + 500_000 * 4/5 = 2_000_000
+        assert total_debt == pytest.approx(2_000_000.0)
+
+    def test_custom_params(self):
+        df = self._make_oi_df(
+            timestamps=["2025-01-01T00:00:00"],
+            venues=["hyperliquid"],
+            coins=["SOL"],
+            oi_values=[100_000.0],
+        )
+        positions = build_positions_from_oi(df, leverage=10.0, liq_threshold=1.25, layer="morpho")
+        assert len(positions) == 1
+        assert positions[0].collateral_usd == pytest.approx(10_000.0)
+        assert positions[0].debt_usd == pytest.approx(90_000.0)
+        assert positions[0].liquidation_threshold == 1.25
+        assert positions[0].layer == "morpho"
+
+    def test_zero_oi_skipped(self):
+        df = self._make_oi_df(
+            timestamps=["2025-01-01T00:00:00"],
+            venues=["binance"],
+            coins=["BTC"],
+            oi_values=[0.0],
+        )
+        assert build_positions_from_oi(df) == []
+
+    def test_empty_df(self):
+        import polars as pl
+
+        df = pl.DataFrame({
+            "timestamp": pl.Series([], dtype=pl.Datetime("us", "UTC")),
+            "venue": pl.Series([], dtype=pl.Utf8),
+            "coin": pl.Series([], dtype=pl.Utf8),
+            "oi_usd": pl.Series([], dtype=pl.Float64),
+        })
+        assert build_positions_from_oi(df) == []
+
+
+# ---------------------------------------------------------------------------
 # Integration test — uses real parquet data
 # ---------------------------------------------------------------------------
 
@@ -215,22 +286,7 @@ class TestCascadeWithRealOI:
         import polars as pl
 
         oi = pl.read_parquet(self.OI_PATH)
-        # Use most recent snapshot per venue/coin, assume 5x leverage
-        latest = oi.sort("timestamp").group_by(["venue", "coin"]).last()
-        positions: list[Position] = []
-        for row in latest.iter_rows(named=True):
-            notional = row.get("oi_usd", 0)
-            if notional is None or notional <= 0:
-                continue
-            collateral = notional / 5.0
-            positions.append(
-                Position(
-                    collateral_usd=collateral,
-                    debt_usd=notional - collateral,
-                    liquidation_threshold=1.0,
-                    layer="perp",
-                )
-            )
+        positions = build_positions_from_oi(oi, leverage=5.0)
 
         if not positions:
             pytest.skip("no valid OI rows found")
