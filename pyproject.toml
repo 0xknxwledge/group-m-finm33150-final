@@ -29,7 +29,9 @@ module-name = "funding_the_fall"
 [dependency-groups]
 dev = [
     "ipykernel>=7.1.0",
+    "nbconvert>=7.17.0",
     "nbformat>=5.10.4",
+    "pyarrow>=23.0.1",
     "pytest>=9.0.2",
     "ruff>=0.14.13",
     "ty>=0.0.20",
