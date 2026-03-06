@@ -266,6 +266,66 @@ class TestBuildPositionsFromOI:
         })
         assert build_positions_from_oi(df) == []
 
+    def test_multiple_snapshots_picks_latest(self):
+        df = self._make_oi_df(
+            timestamps=["2025-01-01T00:00:00", "2025-01-02T00:00:00", "2025-01-03T00:00:00"],
+            venues=["binance", "binance", "binance"],
+            coins=["BTC", "BTC", "BTC"],
+            oi_values=[1_000_000.0, 2_000_000.0, 3_000_000.0],
+        )
+        positions = build_positions_from_oi(df, leverage=5.0)
+        assert len(positions) == 1
+        assert positions[0].collateral_usd == pytest.approx(3_000_000.0 / 5.0)
+
+    def test_negative_oi_skipped(self):
+        df = self._make_oi_df(
+            timestamps=["2025-01-01T00:00:00"],
+            venues=["binance"],
+            coins=["BTC"],
+            oi_values=[-500_000.0],
+        )
+        assert build_positions_from_oi(df) == []
+
+    def test_null_oi_skipped(self):
+        import polars as pl
+
+        df = pl.DataFrame({
+            "timestamp": ["2025-01-01T00:00:00"],
+            "venue": ["binance"],
+            "coin": ["BTC"],
+            "oi_usd": [None],
+        }).with_columns(
+            pl.col("timestamp").str.to_datetime(time_zone="UTC"),
+            pl.col("oi_usd").cast(pl.Float64),
+        )
+        assert build_positions_from_oi(df) == []
+
+    def test_leverage_math(self):
+        for lev in [2.0, 10.0, 20.0]:
+            notional = 1_000_000.0
+            df = self._make_oi_df(
+                timestamps=["2025-01-01T00:00:00"],
+                venues=["binance"],
+                coins=["BTC"],
+                oi_values=[notional],
+            )
+            positions = build_positions_from_oi(df, leverage=lev)
+            assert len(positions) == 1
+            expected_collateral = notional / lev
+            expected_debt = notional - expected_collateral
+            assert positions[0].collateral_usd == pytest.approx(expected_collateral)
+            assert positions[0].debt_usd == pytest.approx(expected_debt)
+
+    def test_all_positions_have_correct_layer(self):
+        df = self._make_oi_df(
+            timestamps=["2025-01-01T00:00:00", "2025-01-01T00:00:00"],
+            venues=["binance", "bybit"],
+            coins=["BTC", "ETH"],
+            oi_values=[1_000_000.0, 500_000.0],
+        )
+        positions = build_positions_from_oi(df, layer="morpho")
+        assert all(p.layer == "morpho" for p in positions)
+
 
 # ---------------------------------------------------------------------------
 # Integration test — uses real parquet data
@@ -295,3 +355,57 @@ class TestCascadeWithRealOI:
         assert isinstance(result, CascadeResult)
         assert result.effective_shock >= 0.10
         assert result.amplification >= 1.0
+
+    def test_end_to_end_oi_to_risk_signal(self):
+        import polars as pl
+
+        oi = pl.read_parquet(self.OI_PATH)
+        positions = build_positions_from_oi(oi, leverage=5.0)
+
+        if not positions:
+            pytest.skip("no valid OI rows found")
+
+        sig = cascade_risk_signal(positions, 1.0)
+        assert set(sig.keys()) == {"risk_score", "critical_shock", "amplification_at_5pct", "signal"}
+        assert 0.0 <= sig["risk_score"] <= 1.0
+        assert isinstance(sig["signal"], bool)
+        assert sig["amplification_at_5pct"] >= 1.0
+        if sig["critical_shock"] is not None:
+            assert 0.0 < sig["critical_shock"] <= 0.5
+
+
+# ---------------------------------------------------------------------------
+# Interface contract tests
+# ---------------------------------------------------------------------------
+
+
+class TestCascadeInterfaces:
+    """Verify cascade output contracts match downstream consumers."""
+
+    def test_risk_signal_dict_compatible_with_allocation(self):
+        """cascade_risk_signal() output has keys/types allocation.allocate_positions expects."""
+        positions = [
+            Position(collateral_usd=1050, debt_usd=1000, liquidation_threshold=1.0, layer="perp")
+            for _ in range(20)
+        ]
+        sig = cascade_risk_signal(positions, 100.0, orderbook_depth_usd=100_000)
+
+        assert isinstance(sig["risk_score"], float)
+        assert 0.0 <= sig["risk_score"] <= 1.0
+        assert isinstance(sig["signal"], bool)
+        assert sig["critical_shock"] is None or isinstance(sig["critical_shock"], (float, np.floating))
+        assert isinstance(sig["amplification_at_5pct"], (float, np.floating))
+        assert sig["amplification_at_5pct"] >= 1.0
+
+    def test_models_init_reexports(self):
+        """Public API re-exports from models.__init__."""
+        from funding_the_fall.models import (
+            build_positions_from_oi,
+            cascade_risk_signal,
+            compute_amplification_curve,
+            simulate_cascade,
+        )
+        assert callable(simulate_cascade)
+        assert callable(cascade_risk_signal)
+        assert callable(build_positions_from_oi)
+        assert callable(compute_amplification_curve)
