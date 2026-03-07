@@ -174,3 +174,31 @@ class TestLoadOI:
             assert col in df.columns
 
 
+@pytest.mark.integration
+class TestLoadOrderbookDepth:
+    @pytest.fixture(autouse=True)
+    def _use_real_dir(self, monkeypatch):
+        monkeypatch.setattr(storage, "DATA_DIR", DATA_DIR)
+        if not (DATA_DIR / "orderbook_depth.parquet").exists():
+            pytest.skip("orderbook_depth.parquet not present")
+
+    def test_returns_dataframe_with_expected_columns(self):
+        df = storage.load_orderbook_depth()
+        assert isinstance(df, pl.DataFrame)
+        assert "coin" in df.columns
+
+
+@pytest.mark.integration
+class TestLoadLiquidationVolume:
+    @pytest.fixture(autouse=True)
+    def _use_real_dir(self, monkeypatch):
+        monkeypatch.setattr(storage, "DATA_DIR", DATA_DIR)
+        if not (DATA_DIR / "liquidation_volume.parquet").exists():
+            pytest.skip("liquidation_volume.parquet not present")
+
+    def test_returns_dataframe_with_expected_columns(self):
+        df = storage.load_liquidation_volume()
+        assert isinstance(df, pl.DataFrame)
+        assert "coin" in df.columns or "total_usd" in df.columns
+
+

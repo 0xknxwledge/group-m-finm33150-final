@@ -9,15 +9,22 @@ import pytest
 
 from funding_the_fall.models.cascade import (
     CascadeResult,
+    DEFAULT_DEPTH_USD,
+    MAX_LEVERAGE,
     Position,
     _is_liquidated,
     _price_impact,
+    _venue_tiers,
     build_positions_from_oi,
+    build_positions_tiered,
     cascade_risk_signal,
     compute_amplification_curve,
+    depth_by_coin,
+    per_coin_risk_signals,
     sensitivity_to_depth,
     sensitivity_to_leverage,
     simulate_cascade,
+    validate_cascade,
 )
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -632,3 +639,260 @@ class TestSensitivityToDepth:
         amp_shallow = max(r.amplification for r in result[100_000])
         amp_deep = max(r.amplification for r in result[50e6])
         assert amp_shallow >= amp_deep
+
+
+# ---------------------------------------------------------------------------
+# build_positions_tiered
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPositionsTiered:
+    @staticmethod
+    def _make_oi_df(venues=None, coins=None, oi_values=None):
+        import polars as pl
+
+        venues = venues or ["binance"]
+        coins = coins or ["BTC"]
+        oi_values = oi_values or [1_000_000.0]
+        return pl.DataFrame({
+            "timestamp": ["2025-01-01T00:00:00"] * len(venues),
+            "venue": venues,
+            "coin": coins,
+            "oi_usd": oi_values,
+        }).with_columns(pl.col("timestamp").str.to_datetime(time_zone="UTC"))
+
+    def test_default_tiers_3_positions_per_row(self):
+        df = self._make_oi_df()
+        positions = build_positions_tiered(df)
+        # Default: 3 tiers per (venue, coin) row
+        assert len(positions) == 3
+
+    def test_custom_tiers(self):
+        df = self._make_oi_df()
+        custom = [(5.0, 0.6), (20.0, 0.4)]
+        positions = build_positions_tiered(df, tiers=custom)
+        assert len(positions) == 2
+
+    def test_weight_sum(self):
+        df = self._make_oi_df()
+        notional = 1_000_000.0
+        positions = build_positions_tiered(df)
+        total = sum(p.collateral_usd + p.debt_usd for p in positions)
+        assert total == pytest.approx(notional)
+
+    def test_venue_specific_max_leverage(self):
+        # Binance BTC max = 125x, dYdX HYPE max = 5x
+        tiers_binance = _venue_tiers("binance", "BTC")
+        tiers_dydx = _venue_tiers("dydx", "HYPE")
+        max_binance = max(lev for lev, _ in tiers_binance)
+        max_dydx = max(lev for lev, _ in tiers_dydx)
+        assert max_binance == 125.0
+        assert max_dydx == 5.0
+
+    def test_unknown_venue_fallback(self):
+        tiers = _venue_tiers("unknown_venue", "BTC")
+        # Fallback max_lev = 10
+        max_lev = max(lev for lev, _ in tiers)
+        assert max_lev == 10.0
+
+    def test_empty_df(self):
+        import polars as pl
+
+        df = pl.DataFrame({
+            "timestamp": pl.Series([], dtype=pl.Datetime("us", "UTC")),
+            "venue": pl.Series([], dtype=pl.Utf8),
+            "coin": pl.Series([], dtype=pl.Utf8),
+            "oi_usd": pl.Series([], dtype=pl.Float64),
+        })
+        assert build_positions_tiered(df) == []
+
+    def test_zero_oi(self):
+        df = self._make_oi_df(oi_values=[0.0])
+        assert build_positions_tiered(df) == []
+
+
+# ---------------------------------------------------------------------------
+# depth_by_coin
+# ---------------------------------------------------------------------------
+
+
+class TestDepthByCoin:
+    def test_single_coin(self):
+        import polars as pl
+
+        df = pl.DataFrame({
+            "coin": ["BTC", "BTC"],
+            "venue": ["binance", "bybit"],
+            "bid_depth_usd": [1_000_000.0, 500_000.0],
+        })
+        result = depth_by_coin(df)
+        assert result["BTC"] == pytest.approx(1_500_000.0)
+
+    def test_multiple_coins(self):
+        import polars as pl
+
+        df = pl.DataFrame({
+            "coin": ["BTC", "ETH", "BTC"],
+            "venue": ["binance", "binance", "bybit"],
+            "bid_depth_usd": [1_000_000.0, 300_000.0, 500_000.0],
+        })
+        result = depth_by_coin(df)
+        assert result["BTC"] == pytest.approx(1_500_000.0)
+        assert result["ETH"] == pytest.approx(300_000.0)
+
+    def test_empty_df(self):
+        import polars as pl
+
+        df = pl.DataFrame({
+            "coin": pl.Series([], dtype=pl.Utf8),
+            "venue": pl.Series([], dtype=pl.Utf8),
+            "bid_depth_usd": pl.Series([], dtype=pl.Float64),
+        })
+        assert depth_by_coin(df) == {}
+
+
+# ---------------------------------------------------------------------------
+# per_coin_risk_signals
+# ---------------------------------------------------------------------------
+
+
+class TestPerCoinRiskSignals:
+    @staticmethod
+    def _make_oi_df(coins, oi=1_000_000.0):
+        import polars as pl
+
+        rows = []
+        for coin in coins:
+            rows.append({
+                "timestamp": "2025-01-01T00:00:00",
+                "venue": "binance",
+                "coin": coin,
+                "oi_usd": oi,
+            })
+        return pl.DataFrame(rows).with_columns(
+            pl.col("timestamp").str.to_datetime(time_zone="UTC")
+        )
+
+    def test_multiple_coins(self):
+        df = self._make_oi_df(["BTC", "ETH"])
+        result = per_coin_risk_signals(df)
+        assert "BTC" in result
+        assert "ETH" in result
+        for sig in result.values():
+            assert "risk_score" in sig
+
+    def test_tiered_vs_uniform(self):
+        df = self._make_oi_df(["BTC"])
+        r_tiered = per_coin_risk_signals(df, tiered=True)
+        r_uniform = per_coin_risk_signals(df, tiered=False)
+        assert "BTC" in r_tiered
+        assert "BTC" in r_uniform
+
+    def test_empty_oi(self):
+        import polars as pl
+
+        df = pl.DataFrame({
+            "timestamp": pl.Series([], dtype=pl.Datetime("us", "UTC")),
+            "venue": pl.Series([], dtype=pl.Utf8),
+            "coin": pl.Series([], dtype=pl.Utf8),
+            "oi_usd": pl.Series([], dtype=pl.Float64),
+        })
+        result = per_coin_risk_signals(df)
+        assert result == {}
+
+    def test_depth_per_coin(self):
+        df = self._make_oi_df(["BTC"])
+        depth = {"BTC": 500_000.0}
+        result = per_coin_risk_signals(df, depth_per_coin=depth)
+        assert "BTC" in result
+
+
+# ---------------------------------------------------------------------------
+# validate_cascade
+# ---------------------------------------------------------------------------
+
+
+class TestValidateCascade:
+    @staticmethod
+    def _make_test_data(drawdown: bool = True):
+        import polars as pl
+        import datetime as dt
+
+        n = 100
+        base_ts = dt.datetime(2025, 1, 1, tzinfo=dt.timezone.utc)
+        timestamps = [base_ts + dt.timedelta(hours=i) for i in range(n)]
+
+        if drawdown:
+            # Create a clear drawdown: price rises then drops 10%
+            prices = [100.0] * 30
+            for i in range(30, 50):
+                prices.append(100.0 - (i - 30) * 0.6)  # drop to ~88
+            prices.extend([88.0] * 50)
+        else:
+            prices = [100.0 + i * 0.01 for i in range(n)]
+
+        candles = pl.DataFrame({
+            "timestamp": timestamps[:n],
+            "coin": ["BTC"] * n,
+            "venue": ["binance"] * n,
+            "o": prices, "h": prices, "l": prices, "c": prices,
+            "v": [1000.0] * n,
+        })
+
+        liq_vol = pl.DataFrame({
+            "timestamp": timestamps[:5],
+            "coin": ["BTC"] * 5,
+            "venue": ["binance"] * 5,
+            "total_usd": [50_000.0] * 5,
+        })
+
+        oi_df = pl.DataFrame({
+            "timestamp": [timestamps[0]],
+            "venue": ["binance"],
+            "coin": ["BTC"],
+            "oi_usd": [10_000_000.0],
+        })
+
+        return candles, liq_vol, oi_df
+
+    def test_drawdown_detection(self):
+        import polars as pl
+
+        candles, liq_vol, oi_df = self._make_test_data(drawdown=True)
+        result = validate_cascade(candles, liq_vol, oi_df, drawdown_threshold=0.05)
+        assert isinstance(result, pl.DataFrame)
+        # Should detect at least one drawdown event
+        assert len(result) >= 1
+
+    def test_no_drawdown(self):
+        import polars as pl
+
+        candles, liq_vol, oi_df = self._make_test_data(drawdown=False)
+        result = validate_cascade(candles, liq_vol, oi_df, drawdown_threshold=0.05)
+        assert isinstance(result, pl.DataFrame)
+        assert len(result) == 0
+
+    def test_output_schema(self):
+        candles, liq_vol, oi_df = self._make_test_data(drawdown=True)
+        result = validate_cascade(candles, liq_vol, oi_df, drawdown_threshold=0.05)
+        expected_cols = {"timestamp", "coin", "drawdown_pct",
+                         "predicted_liq_usd", "realized_liq_usd"}
+        assert set(result.columns) == expected_cols
+
+    def test_empty_candles(self):
+        import polars as pl
+        import datetime as dt
+
+        empty_candles = pl.DataFrame({
+            "timestamp": pl.Series([], dtype=pl.Datetime("us", "UTC")),
+            "coin": pl.Series([], dtype=pl.Utf8),
+            "venue": pl.Series([], dtype=pl.Utf8),
+            "o": pl.Series([], dtype=pl.Float64),
+            "h": pl.Series([], dtype=pl.Float64),
+            "l": pl.Series([], dtype=pl.Float64),
+            "c": pl.Series([], dtype=pl.Float64),
+            "v": pl.Series([], dtype=pl.Float64),
+        })
+        _, liq_vol, oi_df = self._make_test_data()
+        result = validate_cascade(empty_candles, liq_vol, oi_df)
+        assert len(result) == 0
