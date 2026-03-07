@@ -43,13 +43,13 @@ Everyone writes their own section of the technical notebook and pitchbook.
 | 1. Data Pipeline | **DONE** | 115K funding rows (hourly), 53K OI rows; all unit bugs fixed |
 | 2a. Jump-Diffusion Models | **DONE** | Merton + Kou calibration, model comparison, jump-weighted risk |
 | 2b. Cascade Simulator | **DONE** | All functions implemented (~280 lines) |
-| 3. Carry Strategy | **NOT STARTED** | 3 core functions are stubs |
+| 3. Carry Strategy | **DONE** | All functions implemented; needs 8h→1h epoch update |
 | 3. Allocation | **DONE** | `allocate_positions` + `_enforce_risk_limits` implemented |
 | 4. Backtest Engine | **NOT STARTED** | `run_backtest` is a stub |
 | 4. Transaction Costs | **DONE** | Almgren-Chriss + all 7 venue perp fees |
 | 4. Performance Analytics | **NOT STARTED** | 2 core functions are stubs |
 | 5. Notebook (EDA + Cascade) | **DONE** | Sections 1-4 complete with plots and prose |
-| 5. Notebook (Strategy-Conclusion) | **NOT STARTED** | Sections 5-9 are placeholders |
+| 5. Notebook (Strategy-Conclusion) | **IN PROGRESS** | Section 5 spread EDA done; 6-9 are placeholders |
 | 5. Pitchbook | **NOT STARTED** | Does not exist yet |
 | 5. Academic Papers | **PARTIAL** | Only `Accumulation_Algorithms.pdf`; need Almgren-Chriss + Aloosh-Li |
 
@@ -114,15 +114,16 @@ OXARCHIVE_API_KEY=<key> PYTHONPATH=src python scripts/pull_data.py --quick --coi
 
 ---
 
-## Phase 3 — Strategy (Jean-Luc) -- NOT STARTED
+## Phase 3 — Strategy (Jean-Luc) -- DONE
 
 **Goal:** Turn data into actionable trade signals with position sizing.
 
-- [ ] **`compute_funding_spreads()`** (`strategy/carry.py`) — pairwise cross-venue spreads per epoch
-- [ ] **`simulate_carry()`** (`strategy/carry.py`) — run carry trades given params
-- [ ] **`evaluate_carry()`** (`strategy/carry.py`) — compute Sharpe, win rate, trade count for a param set
-- [ ] **Grid search** — framework exists (`grid_search_params`, `grid_search_all_pairs`, `select_best_params`) but blocked by the 3 stubs above
+- [x] **`compute_funding_spreads()`** (`strategy/carry.py`) — pairwise cross-venue spreads per epoch
+- [x] **`simulate_carry()`** (`strategy/carry.py`) — entry/exit signals with threshold-based rules
+- [x] **`evaluate_carry()`** (`strategy/carry.py`) — Sharpe, win rate, trade count for a param set
+- [x] **Grid search** (`grid_search_params`, `grid_search_all_pairs`, `select_best_params`) — scans entry/exit thresholds per pair
 - [x] **`allocate_positions()`** (`strategy/allocation.py`) — 85/15 carry/cascade, risk limits, risk scaling
+- [ ] **Needs update**: `carry.py` docstring references 8h epochs; should be updated to 1h
 
 ---
 

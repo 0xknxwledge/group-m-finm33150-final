@@ -408,9 +408,13 @@ def _fetch_funding_0xa(
         return _empty(_FUNDING_SCHEMA)
 
     df = pl.DataFrame(data)
+    rate_expr = pl.col("funding_rate").cast(pl.Float64)
+    # Lighter API returns rates in percentage points; convert to decimal
+    if venue_name == "lighter":
+        rate_expr = rate_expr / 100
     df = df.with_columns(
         _parse_0xa_ts().alias("timestamp"),
-        pl.col("funding_rate").cast(pl.Float64),
+        rate_expr.alias("funding_rate"),
         pl.lit(venue_name).alias("venue"),
         pl.lit(coin).alias("coin"),
     ).select("timestamp", "venue", "coin", "funding_rate")
