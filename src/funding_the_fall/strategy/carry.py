@@ -67,7 +67,40 @@ def compute_funding_spreads(funding_df: pd.DataFrame) -> pd.DataFrame:
     Spread = short_venue_rate - long_venue_rate (positive means carry profit).
     Annualized = per-period spread × 3 × 365 (3 funding periods per day).
     """
-    raise NotImplementedError
+    FUNDING_PERIODS_PER_DAY = 3
+    DAYS_PER_YEAR = 365
+
+    # For each (timestamp, coin), build all ordered venue pairs
+    grouped = funding_df.groupby(["timestamp", "coin"])
+    rows: list[dict] = []
+
+    for (ts, coin), grp in grouped:
+        venues = grp.set_index("venue")["funding_rate"]
+        venue_list = venues.index.tolist()
+        for i, v1 in enumerate(venue_list):
+            for v2 in venue_list[i + 1 :]:
+                r1, r2 = venues[v1], venues[v2]
+                # Convention: long_venue has the lower rate (we receive funding),
+                # short_venue has the higher rate (we pay less negative / more positive).
+                # spread = short_rate - long_rate; positive => carry profit.
+                if r1 <= r2:
+                    long_v, short_v = v1, v2
+                    spread = r2 - r1
+                else:
+                    long_v, short_v = v2, v1
+                    spread = r1 - r2
+                rows.append(
+                    {
+                        "timestamp": ts,
+                        "coin": coin,
+                        "long_venue": long_v,
+                        "short_venue": short_v,
+                        "spread": spread,
+                        "spread_annualized": spread * FUNDING_PERIODS_PER_DAY * DAYS_PER_YEAR,
+                    }
+                )
+
+    return pd.DataFrame(rows)
 
 
 def simulate_carry(
@@ -79,7 +112,70 @@ def simulate_carry(
     Returns the full list of entry + exit signals in chronological order.
     Used both for live signal generation and for grid search evaluation.
     """
-    raise NotImplementedError
+    # Filter to the specific (coin, long_venue, short_venue) pair
+    mask = (
+        (spreads_df["coin"] == params.coin)
+        & (spreads_df["long_venue"] == params.long_venue)
+        & (spreads_df["short_venue"] == params.short_venue)
+    )
+    pair_df = spreads_df.loc[mask].sort_values("timestamp").reset_index(drop=True)
+
+    signals: list[CarrySignal] = []
+    in_position = False
+    entry_epoch_idx = 0
+
+    for idx, row in pair_df.iterrows():
+        ts = row["timestamp"]
+        ann_spread = row["spread_annualized"]
+
+        if not in_position:
+            # Entry condition: annualized spread exceeds entry threshold
+            if ann_spread >= params.entry_spread:
+                signals.append(
+                    CarrySignal(
+                        timestamp=pd.Timestamp(ts),
+                        coin=params.coin,
+                        long_venue=params.long_venue,
+                        short_venue=params.short_venue,
+                        spread=ann_spread,
+                        action="enter",
+                    )
+                )
+                in_position = True
+                entry_epoch_idx = idx
+        else:
+            # Exit conditions:
+            #   1. Spread mean-reverts below exit threshold
+            #   2. Holding period exceeds max epochs
+            epochs_held = idx - entry_epoch_idx
+            if ann_spread <= params.exit_spread or epochs_held >= params.max_holding_epochs:
+                signals.append(
+                    CarrySignal(
+                        timestamp=pd.Timestamp(ts),
+                        coin=params.coin,
+                        long_venue=params.long_venue,
+                        short_venue=params.short_venue,
+                        spread=ann_spread,
+                        action="exit",
+                    )
+                )
+                in_position = False
+
+    # If still in position at end of data, force exit on last row
+    if in_position and len(pair_df) > 0:
+        last = pair_df.iloc[-1]
+        signals.append(
+            CarrySignal(
+                timestamp=pd.Timestamp(last["timestamp"]),
+                coin=params.coin,
+                long_venue=params.long_venue,
+                short_venue=params.short_venue,
+                spread=last["spread_annualized"],
+                action="exit",
+            )
+        )
+
+    return signals
 
 
 def evaluate_carry(
@@ -90,7 +186,84 @@ def evaluate_carry(
 
     Metrics: trade count, total carry PnL, Sharpe, avg holding period, win rate.
     """
-    raise NotImplementedError
+    import numpy as np
+
+    signals = simulate_carry(spreads_df, params)
+
+    # Pair up enter/exit signals into round-trip trades
+    trades: list[dict] = []
+    i = 0
+    while i < len(signals):
+        if signals[i].action == "enter":
+            entry_sig = signals[i]
+            # Find matching exit
+            if i + 1 < len(signals) and signals[i + 1].action == "exit":
+                exit_sig = signals[i + 1]
+
+                # Filter the spread series for the holding window
+                mask = (
+                    (spreads_df["coin"] == params.coin)
+                    & (spreads_df["long_venue"] == params.long_venue)
+                    & (spreads_df["short_venue"] == params.short_venue)
+                    & (spreads_df["timestamp"] >= entry_sig.timestamp)
+                    & (spreads_df["timestamp"] <= exit_sig.timestamp)
+                )
+                window = spreads_df.loc[mask].sort_values("timestamp")
+                holding_epochs = max(len(window) - 1, 1)
+
+                # PnL = sum of per-epoch spreads collected while in the trade
+                # Each epoch the carry profit is the raw spread (not annualized)
+                per_epoch_pnl = window["spread"].sum()
+
+                trades.append(
+                    {
+                        "entry_ts": entry_sig.timestamp,
+                        "exit_ts": exit_sig.timestamp,
+                        "holding_epochs": holding_epochs,
+                        "pnl": per_epoch_pnl,
+                    }
+                )
+                i += 2
+            else:
+                i += 1
+        else:
+            i += 1
+
+    n_trades = len(trades)
+    if n_trades == 0:
+        return GridSearchResult(
+            params=params,
+            n_trades=0,
+            total_carry_pnl=0.0,
+            sharpe=0.0,
+            avg_holding_epochs=0.0,
+            win_rate=0.0,
+        )
+
+    pnl_list = [t["pnl"] for t in trades]
+    total_pnl = sum(pnl_list)
+    avg_hold = np.mean([t["holding_epochs"] for t in trades])
+    win_rate = np.mean([1.0 if p > 0 else 0.0 for p in pnl_list])
+
+    # Annualized Sharpe: mean per-trade return / std, scaled by sqrt(trades/year)
+    # Each epoch is 8h, so ~1095 epochs/year
+    pnl_arr = np.array(pnl_list)
+    if pnl_arr.std() > 0 and n_trades > 1:
+        per_trade_sharpe = pnl_arr.mean() / pnl_arr.std()
+        # Scale to annual: assume avg_hold epochs per trade
+        trades_per_year = 1095.0 / avg_hold if avg_hold > 0 else 0.0
+        sharpe = per_trade_sharpe * np.sqrt(trades_per_year)
+    else:
+        sharpe = 0.0
+
+    return GridSearchResult(
+        params=params,
+        n_trades=n_trades,
+        total_carry_pnl=total_pnl,
+        sharpe=float(sharpe),
+        avg_holding_epochs=float(avg_hold),
+        win_rate=float(win_rate),
+    )
 
 
 def grid_search_params(
