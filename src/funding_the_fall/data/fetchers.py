@@ -653,8 +653,7 @@ def _fetch_candles_okx(
 def _fetch_oi_okx(coin: str) -> pl.DataFrame:
     """Fetch current OI snapshot from OKX.
 
-    /api/v5/public/open-interest returns OI in contracts (base asset).
-    We fetch the mark price from /api/v5/public/mark-price to convert to USD.
+    /api/v5/public/open-interest returns oiUsd (already in USD).
     """
     sym = OKX_SYMBOLS.get(coin)
     if not sym:
@@ -664,11 +663,7 @@ def _fetch_oi_okx(coin: str) -> pl.DataFrame:
     if not data:
         return _empty(_OI_SCHEMA)
 
-    oi_contracts = float(data[0].get("oi", 0))
-
-    # Fetch mark price for USD conversion
-    mark_data = _okx_get("/api/v5/public/mark-price", {"instType": "SWAP", "instId": sym})
-    mark_price = float(mark_data[0].get("markPx", 0)) if mark_data else 0
+    oi_usd = float(data[0].get("oiUsd", 0))
 
     now = datetime.now(timezone.utc)
     return pl.DataFrame(
@@ -677,7 +672,7 @@ def _fetch_oi_okx(coin: str) -> pl.DataFrame:
                 "timestamp": now,
                 "venue": "okx",
                 "coin": coin,
-                "oi_usd": oi_contracts * mark_price,
+                "oi_usd": oi_usd,
             }
         ]
     ).cast({"timestamp": pl.Datetime("us", "UTC")})
@@ -1461,4 +1456,120 @@ def fetch_open_interest(
 
     if not frames:
         return _empty(_OI_SCHEMA)
+    return pl.concat(frames).sort("timestamp")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Orderbook depth (multi-venue via 0xArchive)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _bid_depth_1pct(bids: list[dict], mid: float) -> float:
+    """Sum bid-side USD within 1% of mid price."""
+    cutoff = mid * 0.99
+    return sum(
+        float(b["px"]) * float(b["sz"])
+        for b in bids
+        if float(b["px"]) >= cutoff
+    )
+
+
+def fetch_orderbook_depth_all(
+    coins: list[str] | None = None,
+) -> pl.DataFrame:
+    """Fetch 1%-depth from Hyperliquid + Lighter orderbooks via 0xArchive.
+
+    Returns DataFrame: [coin, venue, bid_depth_usd, mid_price].
+    Aggregated depth per coin is sum across venues.
+    """
+    coins = coins or TOKENS
+    rows: list[dict] = []
+
+    for coin in coins:
+        for venue in ("hyperliquid", "lighter"):
+            try:
+                path = f"/v1/{venue}/orderbook/{coin}"
+                resp = requests.get(
+                    f"{OXARCHIVE_API}{path}",
+                    params={"depth": "50"},
+                    headers={"X-API-Key": OXARCHIVE_KEY} if OXARCHIVE_KEY else {},
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                book = resp.json().get("data", {})
+                bids = book.get("bids", [])
+                mid = float(book.get("mid_price", 0) or book.get("midPrice", 0))
+                if mid <= 0:
+                    continue
+                rows.append({
+                    "coin": coin,
+                    "venue": venue,
+                    "bid_depth_usd": _bid_depth_1pct(bids, mid),
+                    "mid_price": mid,
+                })
+            except Exception as e:
+                logger.warning(f"Orderbook depth fetch failed: {venue}/{coin}: {e}")
+
+    if not rows:
+        return pl.DataFrame(schema={
+            "coin": pl.Utf8, "venue": pl.Utf8,
+            "bid_depth_usd": pl.Float64, "mid_price": pl.Float64,
+        })
+    return pl.DataFrame(rows)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Historical liquidation volume (0xArchive — Hyperliquid)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def fetch_liquidation_volume(
+    coins: list[str] | None = None,
+    days: int = 90,
+    interval: str = "1h",
+) -> pl.DataFrame:
+    """Fetch hourly liquidation volume from 0xArchive (Hyperliquid).
+
+    Returns DataFrame: [timestamp, coin, total_usd, long_usd, short_usd, count].
+    """
+    coins = coins or TOKENS
+    end_ms = int(time.time() * 1000)
+    start_ms = end_ms - (days * 24 * 3600 * 1000)
+    frames: list[pl.DataFrame] = []
+
+    for coin in coins:
+        try:
+            data = _0xa_get(
+                f"/v1/hyperliquid/liquidations/volume/{coin}",
+                params={
+                    "start": str(start_ms),
+                    "end": str(end_ms),
+                    "interval": interval,
+                    "limit": "1000",
+                },
+                paginate=True,
+            )
+            if not data:
+                continue
+            df = pl.DataFrame(data).with_columns(
+                _parse_0xa_ts().alias("timestamp"),
+                pl.lit(coin).alias("coin"),
+                pl.col("totalUsd").cast(pl.Float64).alias("total_usd"),
+                pl.col("longUsd").cast(pl.Float64).alias("long_usd"),
+                pl.col("shortUsd").cast(pl.Float64).alias("short_usd"),
+                pl.col("count").cast(pl.Int64).alias("liq_count"),
+            ).select("timestamp", "coin", "total_usd", "long_usd", "short_usd", "liq_count")
+            frames.append(df)
+        except Exception as e:
+            logger.warning(f"Liquidation volume fetch failed: {coin}: {e}")
+
+    if not frames:
+        return pl.DataFrame(schema={
+            "timestamp": pl.Datetime("us", "UTC"),
+            "coin": pl.Utf8,
+            "total_usd": pl.Float64,
+            "long_usd": pl.Float64,
+            "short_usd": pl.Float64,
+            "liq_count": pl.Int64,
+        })
     return pl.concat(frames).sort("timestamp")

@@ -18,6 +18,7 @@ import polars as pl
 from funding_the_fall.models.merton import MertonParams, merton_log_density
 from funding_the_fall.models.cascade import (
     build_positions_from_oi,
+    build_positions_tiered,
     simulate_cascade,
 )
 
@@ -31,14 +32,14 @@ def jump_weighted_risk(
 ) -> dict:
     """Combine calibrated jump tail probabilities with cascade amplification.
 
-    Numerically integrates over δ ∈ [0.5%, 30%]:
+    Numerically integrates over δ ∈ [0.5%, 50%]:
       baseline_loss  = ∫ f(-δ) · δ dδ
       amplified_loss = ∫ f(-δ) · δ · A(δ) dδ
 
-    Returns dict with baseline_loss, amplified_loss, cascade_excess,
-    cascade_multiplier, tail_probability_5pct, amplification_at_5pct.
+    The upper limit of 50% captures extreme but realistic crypto drawdowns
+    (e.g., >30% intraday moves occur multiple times per year).
     """
-    delta_grid = np.linspace(0.005, 0.30, n_shocks)
+    delta_grid = np.linspace(0.005, 0.50, n_shocks)
 
     # Left-tail density: f(-δ) for each shock size
     log_density = merton_log_density(-delta_grid, merton_params, dt)
@@ -56,14 +57,14 @@ def jump_weighted_risk(
         amplifications[i] = result.amplification
 
     # Trapezoidal integration
-    baseline_loss = float(np.trapz(density * delta_grid, delta_grid))
-    amplified_loss = float(np.trapz(density * delta_grid * amplifications, delta_grid))
+    baseline_loss = float(np.trapezoid(density * delta_grid, delta_grid))
+    amplified_loss = float(np.trapezoid(density * delta_grid * amplifications, delta_grid))
     cascade_excess = amplified_loss - baseline_loss
     cascade_multiplier = amplified_loss / baseline_loss if baseline_loss > 0 else 1.0
 
-    # P(return ≤ -5%) ≈ ∫_{0.05}^{0.30} f(-δ) dδ
+    # P(return ≤ -5%) ≈ ∫_{0.05}^{0.50} f(-δ) dδ
     mask = delta_grid >= 0.05
-    tail_prob = float(np.trapz(density[mask], delta_grid[mask]))
+    tail_prob = float(np.trapezoid(density[mask], delta_grid[mask]))
 
     # A(5%)
     idx = int(np.argmin(np.abs(delta_grid - 0.05)))
@@ -84,19 +85,28 @@ def jump_weighted_risk_all_coins(
     dt: float = 1.0,
     leverage: float = 5.0,
     orderbook_depth_usd: float | None = None,
+    depth_per_coin: dict[str, float] | None = None,
+    tiered: bool = False,
 ) -> dict[str, dict]:
     """Compute jump-weighted risk for all coins.
 
-    Suitable for weighting cascade shorts in allocate_positions().
+    If tiered=True, uses build_positions_tiered (5x/10x/25x) instead of
+    uniform leverage. If depth_per_coin is provided, each coin uses its
+    measured orderbook depth.
     """
+    depth_per_coin = depth_per_coin or {}
     results = {}
     for coin, params in merton_params_dict.items():
         coin_oi = oi_df.filter(pl.col("coin") == coin)
-        positions = build_positions_from_oi(coin_oi, leverage=leverage)
+        if tiered:
+            positions = build_positions_tiered(coin_oi)
+        else:
+            positions = build_positions_from_oi(coin_oi, leverage=leverage)
         if not positions:
             continue
+        coin_depth = depth_per_coin.get(coin, orderbook_depth_usd)
         results[coin] = jump_weighted_risk(
             params, positions, dt=dt,
-            orderbook_depth_usd=orderbook_depth_usd,
+            orderbook_depth_usd=coin_depth,
         )
     return results

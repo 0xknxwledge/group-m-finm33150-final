@@ -2,14 +2,12 @@
 
 Owner: Antonio Braz
 
-Models the cross-layer liquidation feedback loop across:
-  - Perpetual futures (Hyperliquid, $3.4B+ OI)
-  - HyperLend (Aave V3 fork, ~$650M TVL)
-  - Morpho Blue isolated lending (~$200M TVL)
+Models the feedback loop between forced liquidations and price impact
+across perpetual futures venues.
 
 Cascade dynamics:
-  price drop → perp liquidations → forced spot selling →
-  lending collateral devaluation → lending liquidations → repeat
+  price drop → perp liquidations → forced selling →
+  orderbook absorption → further price impact → repeat
 
 The amplification curve A(δ) maps initial shocks to terminal effective
 shocks. A(δ) > 1 indicates cascade amplification.
@@ -28,8 +26,51 @@ import numpy as np
 import polars as pl
 from numpy.typing import NDArray
 
-# Approximate 1% orderbook depth for major perps on Hyperliquid (USD).
+# Fallback depth when live orderbook data is unavailable.
 DEFAULT_DEPTH_USD = 5_000_000.0
+
+# Max leverage per (venue, coin) from exchange APIs (March 2026).
+# Used to build per-venue leverage tiers in build_positions_tiered.
+MAX_LEVERAGE: dict[tuple[str, str], int] = {
+    # Hyperliquid
+    ("hyperliquid", "BTC"): 40, ("hyperliquid", "ETH"): 25,
+    ("hyperliquid", "SOL"): 20, ("hyperliquid", "HYPE"): 10,
+    ("hyperliquid", "DOGE"): 10,
+    # Lighter
+    ("lighter", "BTC"): 50, ("lighter", "ETH"): 50,
+    ("lighter", "SOL"): 25, ("lighter", "HYPE"): 20,
+    ("lighter", "DOGE"): 10,
+    # OKX
+    ("okx", "BTC"): 100, ("okx", "ETH"): 100,
+    ("okx", "SOL"): 50, ("okx", "DOGE"): 50,
+    # Kraken
+    ("kraken", "BTC"): 50, ("kraken", "ETH"): 50,
+    ("kraken", "SOL"): 50, ("kraken", "HYPE"): 50,
+    ("kraken", "DOGE"): 50,
+    # Binance
+    ("binance", "BTC"): 125, ("binance", "ETH"): 100,
+    ("binance", "SOL"): 75, ("binance", "HYPE"): 75,
+    ("binance", "DOGE"): 75,
+    # Bybit
+    ("bybit", "BTC"): 100, ("bybit", "ETH"): 100,
+    ("bybit", "SOL"): 100, ("bybit", "HYPE"): 75,
+    ("bybit", "DOGE"): 75,
+    # dYdX
+    ("dydx", "BTC"): 50, ("dydx", "ETH"): 50,
+    ("dydx", "SOL"): 20, ("dydx", "HYPE"): 5,
+    ("dydx", "DOGE"): 10,
+}
+
+
+def _venue_tiers(venue: str, coin: str) -> list[tuple[float, float]]:
+    """Generate leverage tiers for a (venue, coin) pair.
+
+    Tiers: 50% at low leverage (3x), 30% at moderate, 20% at max.
+    The moderate tier is half the venue's max leverage (floored at 5x).
+    """
+    max_lev = MAX_LEVERAGE.get((venue, coin), 10)
+    mid_lev = max(5.0, max_lev / 2)
+    return [(3.0, 0.50), (mid_lev, 0.30), (float(max_lev), 0.20)]
 
 
 @dataclass
@@ -242,6 +283,45 @@ def build_positions_from_oi(
     return positions
 
 
+def build_positions_tiered(
+    oi_df: pl.DataFrame,
+    tiers: list[tuple[float, float]] | None = None,
+    liq_threshold: float = 1.0,
+    layer: str = "perp",
+) -> list[Position]:
+    """Build positions with heterogeneous leverage tiers per (venue, coin).
+
+    When tiers is None (default), each (venue, coin) pair uses venue-specific
+    tiers derived from MAX_LEVERAGE: 50% at 3x, 30% at max/2, 20% at max.
+    This reflects that a Binance BTC position can reach 125x while a dYdX
+    HYPE position maxes at 5x.
+
+    If tiers is provided explicitly, that single tier schedule is applied
+    uniformly to all positions.
+    """
+    latest = oi_df.sort("timestamp").group_by(["venue", "coin"]).last()
+    positions: list[Position] = []
+    for row in latest.iter_rows(named=True):
+        notional = row.get("oi_usd", 0)
+        if notional is None or notional <= 0:
+            continue
+        venue = row.get("venue", "")
+        coin = row.get("coin", "")
+        row_tiers = tiers or _venue_tiers(venue, coin)
+        for leverage, weight in row_tiers:
+            tier_notional = notional * weight
+            collateral = tier_notional / leverage
+            positions.append(
+                Position(
+                    collateral_usd=collateral,
+                    debt_usd=tier_notional - collateral,
+                    liquidation_threshold=liq_threshold,
+                    layer=layer,
+                )
+            )
+    return positions
+
+
 def sensitivity_to_leverage(
     oi_df: pl.DataFrame,
     leverages: list[float] | None = None,
@@ -265,17 +345,39 @@ def sensitivity_to_leverage(
     }
 
 
+def depth_by_coin(depth_df: pl.DataFrame) -> dict[str, float]:
+    """Aggregate per-coin bid depth (USD) across all venues.
+
+    Input schema: [coin, venue, bid_depth_usd, ...].
+    Returns dict mapping coin → total bid-side depth within 1% of mid.
+    """
+    if depth_df.is_empty():
+        return {}
+    agg = depth_df.group_by("coin").agg(
+        pl.col("bid_depth_usd").sum()
+    )
+    return {
+        row["coin"]: row["bid_depth_usd"]
+        for row in agg.iter_rows(named=True)
+    }
+
+
 def per_coin_risk_signals(
     oi_df: pl.DataFrame,
     leverage: float = 5.0,
     orderbook_depth_usd: float | None = None,
+    depth_per_coin: dict[str, float] | None = None,
     threshold_amplification: float = 1.5,
 ) -> dict[str, dict]:
     """Compute cascade risk signal for each coin individually.
 
+    If depth_per_coin is provided (from fetch_orderbook_depth_all),
+    each coin uses its measured depth. Otherwise falls back to
+    orderbook_depth_usd or the module default.
+
     Returns dict keyed by coin → cascade_risk_signal() output.
-    Coins with no OI data are omitted.
     """
+    depth_per_coin = depth_per_coin or {}
     coins = oi_df["coin"].unique().sort().to_list()
     signals: dict[str, dict] = {}
     for coin in coins:
@@ -283,10 +385,11 @@ def per_coin_risk_signals(
         positions = build_positions_from_oi(coin_oi, leverage=leverage)
         if not positions:
             continue
+        coin_depth = depth_per_coin.get(coin, orderbook_depth_usd)
         signals[coin] = cascade_risk_signal(
             positions,
             current_price=1.0,
-            orderbook_depth_usd=orderbook_depth_usd,
+            orderbook_depth_usd=coin_depth,
             threshold_amplification=threshold_amplification,
         )
     return signals
@@ -313,3 +416,99 @@ def sensitivity_to_depth(
         )
         for d in depths_usd
     }
+
+
+def validate_cascade(
+    candles: pl.DataFrame,
+    liq_vol: pl.DataFrame,
+    oi_df: pl.DataFrame,
+    depth_per_coin: dict[str, float] | None = None,
+    drawdown_threshold: float = 0.05,
+    window_hours: int = 24,
+) -> pl.DataFrame:
+    """Compare predicted vs realized liquidation volume during drawdowns.
+
+    Identifies drawdown events from hourly candle data, then for each event:
+    - Predicted: run cascade simulator with the OI snapshot nearest the event
+    - Realized: sum historical liquidation volume during the drawdown window
+
+    Returns DataFrame: [timestamp, coin, drawdown_pct, predicted_liq_usd, realized_liq_usd].
+    """
+    depth_per_coin = depth_per_coin or {}
+    rows: list[dict] = []
+
+    for coin in candles["coin"].unique().sort().to_list():
+        coin_candles = (
+            candles.filter(pl.col("coin") == coin)
+            .sort("timestamp")
+        )
+        if coin_candles.is_empty():
+            continue
+
+        # Rolling max close over window_hours to find drawdowns
+        closes = coin_candles["c"].to_numpy()
+        timestamps = coin_candles["timestamp"].to_list()
+
+        rolling_max = np.maximum.accumulate(closes)
+        drawdowns = (rolling_max - closes) / np.where(rolling_max > 0, rolling_max, 1.0)
+
+        # Find local drawdown peaks exceeding threshold
+        events: list[tuple[int, float]] = []
+        i = 0
+        while i < len(drawdowns):
+            if drawdowns[i] >= drawdown_threshold:
+                # Find the trough of this drawdown episode
+                j = i
+                while j + 1 < len(drawdowns) and drawdowns[j + 1] >= drawdowns[j] * 0.8:
+                    j += 1
+                events.append((j, float(drawdowns[j])))
+                i = j + window_hours  # skip ahead
+            else:
+                i += 1
+
+        coin_oi = oi_df.filter(pl.col("coin") == coin)
+        coin_liq = liq_vol.filter(pl.col("coin") == coin) if "coin" in liq_vol.columns else liq_vol
+
+        for idx, dd_pct in events:
+            ts = timestamps[idx]
+
+            # Nearest OI snapshot
+            oi_snap = coin_oi.filter(pl.col("timestamp") <= ts)
+            if oi_snap.is_empty():
+                continue
+            positions = build_positions_tiered(oi_snap)
+            if not positions:
+                continue
+
+            depth = depth_per_coin.get(coin, DEFAULT_DEPTH_USD)
+            result = simulate_cascade(
+                positions, current_price=1.0,
+                initial_shock_pct=dd_pct, orderbook_depth_usd=depth,
+            )
+            predicted = result.total_debt_liquidated
+
+            # Realized liquidation volume in the window around the event
+            window_start = ts
+            window_end = timestamps[min(idx + window_hours, len(timestamps) - 1)]
+            realized_df = coin_liq.filter(
+                (pl.col("timestamp") >= window_start) & (pl.col("timestamp") <= window_end)
+            )
+            realized = realized_df["total_usd"].sum() if not realized_df.is_empty() else 0.0
+
+            rows.append({
+                "timestamp": ts,
+                "coin": coin,
+                "drawdown_pct": dd_pct,
+                "predicted_liq_usd": predicted,
+                "realized_liq_usd": realized,
+            })
+
+    if not rows:
+        return pl.DataFrame(schema={
+            "timestamp": pl.Datetime("us", "UTC"),
+            "coin": pl.Utf8,
+            "drawdown_pct": pl.Float64,
+            "predicted_liq_usd": pl.Float64,
+            "realized_liq_usd": pl.Float64,
+        })
+    return pl.DataFrame(rows).sort("timestamp")

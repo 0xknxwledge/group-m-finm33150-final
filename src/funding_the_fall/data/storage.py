@@ -81,3 +81,13 @@ def load_oi() -> pl.DataFrame:
     return load_parquet_pl("open_interest")
 
 
+def load_orderbook_depth() -> pl.DataFrame:
+    """Load the orderbook depth snapshot."""
+    return load_parquet_pl("orderbook_depth")
+
+
+def load_liquidation_volume() -> pl.DataFrame:
+    """Load the historical liquidation volume dataset."""
+    return load_parquet_pl("liquidation_volume")
+
+
