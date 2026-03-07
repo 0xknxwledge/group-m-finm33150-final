@@ -200,5 +200,3 @@ class TestLoadLiquidationVolume:
         df = storage.load_liquidation_volume()
         assert isinstance(df, pl.DataFrame)
         assert "coin" in df.columns or "total_usd" in df.columns
-
-

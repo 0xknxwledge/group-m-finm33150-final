@@ -164,7 +164,9 @@ class TestCalibrateKou:
         # Inject mostly negative jumps (p_true ~ 0.2)
         jump_mask = rng.random(n) < 0.08
         jump_signs = rng.random(n) < 0.2  # 20% positive
-        jumps = np.where(jump_signs, rng.exponential(0.03, n), -rng.exponential(0.05, n))
+        jumps = np.where(
+            jump_signs, rng.exponential(0.03, n), -rng.exponential(0.05, n)
+        )
         returns = diffusion.copy()
         returns[jump_mask] += jumps[jump_mask]
 

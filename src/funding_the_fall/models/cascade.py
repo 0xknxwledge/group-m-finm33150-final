@@ -33,31 +33,45 @@ DEFAULT_DEPTH_USD = 5_000_000.0
 # Used to build per-venue leverage tiers in build_positions_tiered.
 MAX_LEVERAGE: dict[tuple[str, str], int] = {
     # Hyperliquid
-    ("hyperliquid", "BTC"): 40, ("hyperliquid", "ETH"): 25,
-    ("hyperliquid", "SOL"): 20, ("hyperliquid", "HYPE"): 10,
+    ("hyperliquid", "BTC"): 40,
+    ("hyperliquid", "ETH"): 25,
+    ("hyperliquid", "SOL"): 20,
+    ("hyperliquid", "HYPE"): 10,
     ("hyperliquid", "DOGE"): 10,
     # Lighter
-    ("lighter", "BTC"): 50, ("lighter", "ETH"): 50,
-    ("lighter", "SOL"): 25, ("lighter", "HYPE"): 20,
+    ("lighter", "BTC"): 50,
+    ("lighter", "ETH"): 50,
+    ("lighter", "SOL"): 25,
+    ("lighter", "HYPE"): 20,
     ("lighter", "DOGE"): 10,
     # OKX
-    ("okx", "BTC"): 100, ("okx", "ETH"): 100,
-    ("okx", "SOL"): 50, ("okx", "DOGE"): 50,
+    ("okx", "BTC"): 100,
+    ("okx", "ETH"): 100,
+    ("okx", "SOL"): 50,
+    ("okx", "DOGE"): 50,
     # Kraken
-    ("kraken", "BTC"): 50, ("kraken", "ETH"): 50,
-    ("kraken", "SOL"): 50, ("kraken", "HYPE"): 50,
+    ("kraken", "BTC"): 50,
+    ("kraken", "ETH"): 50,
+    ("kraken", "SOL"): 50,
+    ("kraken", "HYPE"): 50,
     ("kraken", "DOGE"): 50,
     # Binance
-    ("binance", "BTC"): 125, ("binance", "ETH"): 100,
-    ("binance", "SOL"): 75, ("binance", "HYPE"): 75,
+    ("binance", "BTC"): 125,
+    ("binance", "ETH"): 100,
+    ("binance", "SOL"): 75,
+    ("binance", "HYPE"): 75,
     ("binance", "DOGE"): 75,
     # Bybit
-    ("bybit", "BTC"): 100, ("bybit", "ETH"): 100,
-    ("bybit", "SOL"): 100, ("bybit", "HYPE"): 75,
+    ("bybit", "BTC"): 100,
+    ("bybit", "ETH"): 100,
+    ("bybit", "SOL"): 100,
+    ("bybit", "HYPE"): 75,
     ("bybit", "DOGE"): 75,
     # dYdX
-    ("dydx", "BTC"): 50, ("dydx", "ETH"): 50,
-    ("dydx", "SOL"): 20, ("dydx", "HYPE"): 5,
+    ("dydx", "BTC"): 50,
+    ("dydx", "ETH"): 50,
+    ("dydx", "SOL"): 20,
+    ("dydx", "HYPE"): 5,
     ("dydx", "DOGE"): 10,
 }
 
@@ -371,13 +385,8 @@ def depth_by_coin(depth_df: pl.DataFrame) -> dict[str, float]:
     """
     if depth_df.is_empty():
         return {}
-    agg = depth_df.group_by("coin").agg(
-        pl.col("bid_depth_usd").sum()
-    )
-    return {
-        row["coin"]: row["bid_depth_usd"]
-        for row in agg.iter_rows(named=True)
-    }
+    agg = depth_df.group_by("coin").agg(pl.col("bid_depth_usd").sum())
+    return {row["coin"]: row["bid_depth_usd"] for row in agg.iter_rows(named=True)}
 
 
 def per_coin_risk_signals(
@@ -463,10 +472,7 @@ def validate_cascade(
     rows: list[dict] = []
 
     for coin in candles["coin"].unique().sort().to_list():
-        coin_candles = (
-            candles.filter(pl.col("coin") == coin)
-            .sort("timestamp")
-        )
+        coin_candles = candles.filter(pl.col("coin") == coin).sort("timestamp")
         if coin_candles.is_empty():
             continue
 
@@ -492,7 +498,11 @@ def validate_cascade(
                 i += 1
 
         coin_oi = oi_df.filter(pl.col("coin") == coin)
-        coin_liq = liq_vol.filter(pl.col("coin") == coin) if "coin" in liq_vol.columns else liq_vol
+        coin_liq = (
+            liq_vol.filter(pl.col("coin") == coin)
+            if "coin" in liq_vol.columns
+            else liq_vol
+        )
 
         for idx, dd_pct in events:
             ts = timestamps[idx]
@@ -507,8 +517,10 @@ def validate_cascade(
 
             depth = depth_per_coin.get(coin, DEFAULT_DEPTH_USD)
             result = simulate_cascade(
-                positions, current_price=1.0,
-                initial_shock_pct=dd_pct, orderbook_depth_usd=depth,
+                positions,
+                current_price=1.0,
+                initial_shock_pct=dd_pct,
+                orderbook_depth_usd=depth,
             )
             predicted = result.total_notional_liquidated
 
@@ -516,24 +528,31 @@ def validate_cascade(
             window_start = ts
             window_end = timestamps[min(idx + window_hours, len(timestamps) - 1)]
             realized_df = coin_liq.filter(
-                (pl.col("timestamp") >= window_start) & (pl.col("timestamp") <= window_end)
+                (pl.col("timestamp") >= window_start)
+                & (pl.col("timestamp") <= window_end)
             )
-            realized = realized_df["total_usd"].sum() if not realized_df.is_empty() else 0.0
+            realized = (
+                realized_df["total_usd"].sum() if not realized_df.is_empty() else 0.0
+            )
 
-            rows.append({
-                "timestamp": ts,
-                "coin": coin,
-                "drawdown_pct": dd_pct,
-                "predicted_liq_usd": predicted,
-                "realized_liq_usd": realized,
-            })
+            rows.append(
+                {
+                    "timestamp": ts,
+                    "coin": coin,
+                    "drawdown_pct": dd_pct,
+                    "predicted_liq_usd": predicted,
+                    "realized_liq_usd": realized,
+                }
+            )
 
     if not rows:
-        return pl.DataFrame(schema={
-            "timestamp": pl.Datetime("us", "UTC"),
-            "coin": pl.Utf8,
-            "drawdown_pct": pl.Float64,
-            "predicted_liq_usd": pl.Float64,
-            "realized_liq_usd": pl.Float64,
-        })
+        return pl.DataFrame(
+            schema={
+                "timestamp": pl.Datetime("us", "UTC"),
+                "coin": pl.Utf8,
+                "drawdown_pct": pl.Float64,
+                "predicted_liq_usd": pl.Float64,
+                "realized_liq_usd": pl.Float64,
+            }
+        )
     return pl.DataFrame(rows).sort("timestamp")

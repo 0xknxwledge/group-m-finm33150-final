@@ -89,5 +89,3 @@ def load_orderbook_depth() -> pl.DataFrame:
 def load_liquidation_volume() -> pl.DataFrame:
     """Load the historical liquidation volume dataset."""
     return load_parquet_pl("liquidation_volume")
-
-

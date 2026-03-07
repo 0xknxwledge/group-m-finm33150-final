@@ -31,13 +31,21 @@ def _make_carry_signal(
 
 
 def _zero_cascade() -> dict:
-    return {"risk_score": 0.0, "critical_shock": None,
-            "amplification_at_5pct": 1.0, "signal": False}
+    return {
+        "risk_score": 0.0,
+        "critical_shock": None,
+        "amplification_at_5pct": 1.0,
+        "signal": False,
+    }
 
 
 def _high_cascade() -> dict:
-    return {"risk_score": 0.8, "critical_shock": 0.05,
-            "amplification_at_5pct": 2.5, "signal": True}
+    return {
+        "risk_score": 0.8,
+        "critical_shock": 0.05,
+        "amplification_at_5pct": 2.5,
+        "signal": True,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -70,8 +78,9 @@ class TestAllocatePositions:
         signals = [_make_carry_signal()]
         nav = 1_000_000
         per_coin = {"BTC": {"amplification_at_5pct": 2.0}}
-        targets = allocate_positions(signals, _high_cascade(), nav=nav,
-                                     per_coin_signals=per_coin)
+        targets = allocate_positions(
+            signals, _high_cascade(), nav=nav, per_coin_signals=per_coin
+        )
         cascade_targets = [t for t in targets if t.strategy == "cascade"]
         assert len(cascade_targets) >= 1
         assert all(t.side == "short" for t in cascade_targets)
@@ -86,7 +95,9 @@ class TestAllocatePositions:
 
     def test_spread_weighting(self):
         sig1 = _make_carry_signal(spread=0.30, coin="BTC")
-        sig2 = _make_carry_signal(spread=0.10, coin="ETH", long_venue="okx", short_venue="kraken")
+        sig2 = _make_carry_signal(
+            spread=0.10, coin="ETH", long_venue="okx", short_venue="kraken"
+        )
         targets = allocate_positions([sig1, sig2], _zero_cascade(), nav=1_000_000)
         btc_not = sum(t.notional_usd for t in targets if t.coin == "BTC")
         eth_not = sum(t.notional_usd for t in targets if t.coin == "ETH")
@@ -102,7 +113,9 @@ class TestAllocatePositions:
             "ETH": {"amplification_at_5pct": 1.5},
         }
         targets = allocate_positions(
-            [_make_carry_signal()], _high_cascade(), nav=1_000_000,
+            [_make_carry_signal()],
+            _high_cascade(),
+            nav=1_000_000,
             per_coin_signals=per_coin,
         )
         cascade_targets = [t for t in targets if t.strategy == "cascade"]
@@ -116,7 +129,9 @@ class TestAllocatePositions:
             "BTC": {"amplification_at_5pct": 0.9},  # below 1.0
         }
         targets = allocate_positions(
-            [_make_carry_signal()], _high_cascade(), nav=1_000_000,
+            [_make_carry_signal()],
+            _high_cascade(),
+            nav=1_000_000,
             per_coin_signals=per_coin,
         )
         cascade_targets = [t for t in targets if t.strategy == "cascade"]
@@ -138,33 +153,60 @@ class TestEnforceRiskLimits:
     def test_gross_leverage_cap(self):
         nav = 100_000
         targets = [
-            PositionTarget(pd.Timestamp("2025-01-01"), "BTC", "binance", "long", 300_000, "carry"),
-            PositionTarget(pd.Timestamp("2025-01-01"), "BTC", "bybit", "short", 300_000, "carry"),
+            PositionTarget(
+                pd.Timestamp("2025-01-01"), "BTC", "binance", "long", 300_000, "carry"
+            ),
+            PositionTarget(
+                pd.Timestamp("2025-01-01"), "BTC", "bybit", "short", 300_000, "carry"
+            ),
         ]
-        result = _enforce_risk_limits(targets, nav, max_leverage=5.0,
-                                      max_single_exchange_pct=1.0, max_net_delta_pct=1.0)
+        result = _enforce_risk_limits(
+            targets,
+            nav,
+            max_leverage=5.0,
+            max_single_exchange_pct=1.0,
+            max_net_delta_pct=1.0,
+        )
         gross = sum(t.notional_usd for t in result)
         assert gross <= 5.0 * nav + 1e-6
 
     def test_single_exchange_cap(self):
         nav = 100_000
         targets = [
-            PositionTarget(pd.Timestamp("2025-01-01"), "BTC", "binance", "long", 200_000, "carry"),
-            PositionTarget(pd.Timestamp("2025-01-01"), "ETH", "binance", "short", 200_000, "carry"),
+            PositionTarget(
+                pd.Timestamp("2025-01-01"), "BTC", "binance", "long", 200_000, "carry"
+            ),
+            PositionTarget(
+                pd.Timestamp("2025-01-01"), "ETH", "binance", "short", 200_000, "carry"
+            ),
         ]
-        result = _enforce_risk_limits(targets, nav, max_leverage=10.0,
-                                      max_single_exchange_pct=0.30, max_net_delta_pct=1.0)
+        result = _enforce_risk_limits(
+            targets,
+            nav,
+            max_leverage=10.0,
+            max_single_exchange_pct=0.30,
+            max_net_delta_pct=1.0,
+        )
         binance_total = sum(t.notional_usd for t in result if t.venue == "binance")
         assert binance_total <= 0.30 * nav + 1e-6
 
     def test_net_delta_cap(self):
         nav = 100_000
         targets = [
-            PositionTarget(pd.Timestamp("2025-01-01"), "BTC", "binance", "long", 200_000, "carry"),
-            PositionTarget(pd.Timestamp("2025-01-01"), "BTC", "bybit", "short", 50_000, "carry"),
+            PositionTarget(
+                pd.Timestamp("2025-01-01"), "BTC", "binance", "long", 200_000, "carry"
+            ),
+            PositionTarget(
+                pd.Timestamp("2025-01-01"), "BTC", "bybit", "short", 50_000, "carry"
+            ),
         ]
-        result = _enforce_risk_limits(targets, nav, max_leverage=10.0,
-                                      max_single_exchange_pct=1.0, max_net_delta_pct=0.10)
+        result = _enforce_risk_limits(
+            targets,
+            nav,
+            max_leverage=10.0,
+            max_single_exchange_pct=1.0,
+            max_net_delta_pct=0.10,
+        )
         net = sum(t.notional_usd * (1 if t.side == "long" else -1) for t in result)
         assert abs(net) <= 0.10 * nav + 1e-6
 
@@ -174,7 +216,9 @@ class TestEnforceRiskLimits:
 
     def test_zero_nav(self):
         targets = [
-            PositionTarget(pd.Timestamp("2025-01-01"), "BTC", "binance", "long", 100, "carry"),
+            PositionTarget(
+                pd.Timestamp("2025-01-01"), "BTC", "binance", "long", 100, "carry"
+            ),
         ]
         result = _enforce_risk_limits(targets, 0.0, 5.0, 0.40, 0.10)
         # Should return targets unchanged (nav <= 0 early return)

@@ -401,7 +401,12 @@ def _fetch_funding_0xa(
     start_ms = end_ms - (days * 24 * 3600 * 1000)
     data = _0xa_get(
         f"/v1/{venue_path}/funding/{coin}",
-        params={"start": str(start_ms), "end": str(end_ms), "interval": "1h", "limit": "1000"},
+        params={
+            "start": str(start_ms),
+            "end": str(end_ms),
+            "interval": "1h",
+            "limit": "1000",
+        },
         paginate=True,
     )
     if not data:
@@ -479,7 +484,12 @@ def _fetch_oi_0xa(
     start_ms = end_ms - (days * 24 * 3600 * 1000)
     data = _0xa_get(
         f"/v1/{venue_path}/openinterest/{coin}",
-        params={"start": str(start_ms), "end": str(end_ms), "interval": "1h", "limit": "1000"},
+        params={
+            "start": str(start_ms),
+            "end": str(end_ms),
+            "interval": "1h",
+            "limit": "1000",
+        },
         paginate=True,
     )
     if not data:
@@ -504,7 +514,6 @@ def _fetch_oi_0xa(
         oi_expr,
     ).select("timestamp", "venue", "coin", "oi_usd")
     return df.unique(subset=["timestamp", "coin"]).sort("timestamp")
-
 
 
 # ── 0xArchive prices (for lending module) ──
@@ -676,6 +685,7 @@ def _fetch_oi_okx(coin: str) -> pl.DataFrame:
             }
         ]
     ).cast({"timestamp": pl.Datetime("us", "UTC")})
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Kraken Futures (free, no auth, works from US)
@@ -1128,7 +1138,6 @@ def _fetch_oi_bybit(coin: str) -> pl.DataFrame:
     ).cast({"timestamp": pl.Datetime("us", "UTC")})
 
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # dYdX v4 (no auth, works from US)
 # ═══════════════════════════════════════════════════════════════════════
@@ -1468,9 +1477,7 @@ def _bid_depth_1pct(bids: list[dict], mid: float) -> float:
     """Sum bid-side USD within 1% of mid price."""
     cutoff = mid * 0.99
     return sum(
-        float(b["px"]) * float(b["sz"])
-        for b in bids
-        if float(b["px"]) >= cutoff
+        float(b["px"]) * float(b["sz"]) for b in bids if float(b["px"]) >= cutoff
     )
 
 
@@ -1501,20 +1508,26 @@ def fetch_orderbook_depth_all(
                 mid = float(book.get("mid_price", 0) or book.get("midPrice", 0))
                 if mid <= 0:
                     continue
-                rows.append({
-                    "coin": coin,
-                    "venue": venue,
-                    "bid_depth_usd": _bid_depth_1pct(bids, mid),
-                    "mid_price": mid,
-                })
+                rows.append(
+                    {
+                        "coin": coin,
+                        "venue": venue,
+                        "bid_depth_usd": _bid_depth_1pct(bids, mid),
+                        "mid_price": mid,
+                    }
+                )
             except Exception as e:
                 logger.warning(f"Orderbook depth fetch failed: {venue}/{coin}: {e}")
 
     if not rows:
-        return pl.DataFrame(schema={
-            "coin": pl.Utf8, "venue": pl.Utf8,
-            "bid_depth_usd": pl.Float64, "mid_price": pl.Float64,
-        })
+        return pl.DataFrame(
+            schema={
+                "coin": pl.Utf8,
+                "venue": pl.Utf8,
+                "bid_depth_usd": pl.Float64,
+                "mid_price": pl.Float64,
+            }
+        )
     return pl.DataFrame(rows)
 
 
@@ -1551,25 +1564,38 @@ def fetch_liquidation_volume(
             )
             if not data:
                 continue
-            df = pl.DataFrame(data).with_columns(
-                _parse_0xa_ts().alias("timestamp"),
-                pl.lit(coin).alias("coin"),
-                pl.col("totalUsd").cast(pl.Float64).alias("total_usd"),
-                pl.col("longUsd").cast(pl.Float64).alias("long_usd"),
-                pl.col("shortUsd").cast(pl.Float64).alias("short_usd"),
-                pl.col("count").cast(pl.Int64).alias("liq_count"),
-            ).select("timestamp", "coin", "total_usd", "long_usd", "short_usd", "liq_count")
+            df = (
+                pl.DataFrame(data)
+                .with_columns(
+                    _parse_0xa_ts().alias("timestamp"),
+                    pl.lit(coin).alias("coin"),
+                    pl.col("totalUsd").cast(pl.Float64).alias("total_usd"),
+                    pl.col("longUsd").cast(pl.Float64).alias("long_usd"),
+                    pl.col("shortUsd").cast(pl.Float64).alias("short_usd"),
+                    pl.col("count").cast(pl.Int64).alias("liq_count"),
+                )
+                .select(
+                    "timestamp",
+                    "coin",
+                    "total_usd",
+                    "long_usd",
+                    "short_usd",
+                    "liq_count",
+                )
+            )
             frames.append(df)
         except Exception as e:
             logger.warning(f"Liquidation volume fetch failed: {coin}: {e}")
 
     if not frames:
-        return pl.DataFrame(schema={
-            "timestamp": pl.Datetime("us", "UTC"),
-            "coin": pl.Utf8,
-            "total_usd": pl.Float64,
-            "long_usd": pl.Float64,
-            "short_usd": pl.Float64,
-            "liq_count": pl.Int64,
-        })
+        return pl.DataFrame(
+            schema={
+                "timestamp": pl.Datetime("us", "UTC"),
+                "coin": pl.Utf8,
+                "total_usd": pl.Float64,
+                "long_usd": pl.Float64,
+                "short_usd": pl.Float64,
+                "liq_count": pl.Int64,
+            }
+        )
     return pl.concat(frames).sort("timestamp")

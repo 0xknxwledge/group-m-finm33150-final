@@ -58,7 +58,9 @@ def jump_weighted_risk(
 
     # Trapezoidal integration
     baseline_loss = float(np.trapezoid(density * delta_grid, delta_grid))
-    amplified_loss = float(np.trapezoid(density * delta_grid * amplifications, delta_grid))
+    amplified_loss = float(
+        np.trapezoid(density * delta_grid * amplifications, delta_grid)
+    )
     cascade_excess = amplified_loss - baseline_loss
     cascade_multiplier = amplified_loss / baseline_loss if baseline_loss > 0 else 1.0
 
@@ -106,7 +108,9 @@ def jump_weighted_risk_all_coins(
             continue
         coin_depth = depth_per_coin.get(coin, orderbook_depth_usd)
         results[coin] = jump_weighted_risk(
-            params, positions, dt=dt,
+            params,
+            positions,
+            dt=dt,
             orderbook_depth_usd=coin_depth,
         )
     return results

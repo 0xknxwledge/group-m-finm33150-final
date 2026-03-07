@@ -16,7 +16,10 @@ from funding_the_fall.models.cascade import (
     validate_cascade,
     MAX_LEVERAGE,
 )
-from funding_the_fall.models.risk import jump_weighted_risk, jump_weighted_risk_all_coins
+from funding_the_fall.models.risk import (
+    jump_weighted_risk,
+    jump_weighted_risk_all_coins,
+)
 
 __all__ = [
     "calibrate_merton",

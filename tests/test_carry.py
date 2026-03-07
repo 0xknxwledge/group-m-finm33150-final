@@ -32,7 +32,9 @@ def _make_funding_df(
         for i, v in enumerate(venues):
             # venue 0 has lower rate, venue 1 has higher rate
             rate = base_rate + i * spread
-            rows.append({"timestamp": ts, "venue": v, "coin": coin, "funding_rate": rate})
+            rows.append(
+                {"timestamp": ts, "venue": v, "coin": coin, "funding_rate": rate}
+            )
     return pd.DataFrame(rows)
 
 
@@ -55,9 +57,7 @@ class TestComputeFundingSpreads:
         df = _make_spreads_df()
         # annualized = spread * 3 * 365
         row = df.iloc[0]
-        assert row["spread_annualized"] == pytest.approx(
-            row["spread"] * 3 * 365
-        )
+        assert row["spread_annualized"] == pytest.approx(row["spread"] * 3 * 365)
 
     def test_long_short_assignment(self):
         df = _make_spreads_df()
@@ -92,9 +92,14 @@ class TestComputeFundingSpreads:
 class TestSimulateCarry:
     def test_entry_exit_signals(self):
         spreads = _make_spreads_df(spread=0.001)  # large spread
-        params = CarryParams("BTC", "binance", "bybit",
-                             entry_spread=0.10, exit_spread=0.01,
-                             max_holding_epochs=100)
+        params = CarryParams(
+            "BTC",
+            "binance",
+            "bybit",
+            entry_spread=0.10,
+            exit_spread=0.01,
+            max_holding_epochs=100,
+        )
         signals = simulate_carry(spreads, params)
         # Should have at least one entry
         entries = [s for s in signals if s.action == "enter"]
@@ -104,9 +109,14 @@ class TestSimulateCarry:
 
     def test_max_holding_exit(self):
         spreads = _make_spreads_df(n_epochs=50, spread=0.001)
-        params = CarryParams("BTC", "binance", "bybit",
-                             entry_spread=0.10, exit_spread=0.0,
-                             max_holding_epochs=5)
+        params = CarryParams(
+            "BTC",
+            "binance",
+            "bybit",
+            entry_spread=0.10,
+            exit_spread=0.0,
+            max_holding_epochs=5,
+        )
         signals = simulate_carry(spreads, params)
         # With exit_spread=0, exit should be forced by max_holding
         exits = [s for s in signals if s.action == "exit"]
@@ -114,26 +124,41 @@ class TestSimulateCarry:
 
     def test_forced_exit_at_end(self):
         spreads = _make_spreads_df(n_epochs=10, spread=0.001)
-        params = CarryParams("BTC", "binance", "bybit",
-                             entry_spread=0.10, exit_spread=0.0,
-                             max_holding_epochs=100)
+        params = CarryParams(
+            "BTC",
+            "binance",
+            "bybit",
+            entry_spread=0.10,
+            exit_spread=0.0,
+            max_holding_epochs=100,
+        )
         signals = simulate_carry(spreads, params)
         if signals:
             assert signals[-1].action == "exit"
 
     def test_no_entry(self):
         spreads = _make_spreads_df(spread=0.00001)  # tiny spread
-        params = CarryParams("BTC", "binance", "bybit",
-                             entry_spread=99.0, exit_spread=0.01,
-                             max_holding_epochs=100)
+        params = CarryParams(
+            "BTC",
+            "binance",
+            "bybit",
+            entry_spread=99.0,
+            exit_spread=0.01,
+            max_holding_epochs=100,
+        )
         signals = simulate_carry(spreads, params)
         assert len(signals) == 0
 
     def test_alternation(self):
         spreads = _make_spreads_df(n_epochs=50, spread=0.001)
-        params = CarryParams("BTC", "binance", "bybit",
-                             entry_spread=0.10, exit_spread=0.01,
-                             max_holding_epochs=5)
+        params = CarryParams(
+            "BTC",
+            "binance",
+            "bybit",
+            entry_spread=0.10,
+            exit_spread=0.01,
+            max_holding_epochs=5,
+        )
         signals = simulate_carry(spreads, params)
         # Signals should alternate enter/exit
         for i in range(0, len(signals) - 1, 2):
@@ -150,9 +175,14 @@ class TestSimulateCarry:
 class TestEvaluateCarry:
     def test_zero_trades(self):
         spreads = _make_spreads_df(spread=0.00001)
-        params = CarryParams("BTC", "binance", "bybit",
-                             entry_spread=99.0, exit_spread=0.01,
-                             max_holding_epochs=100)
+        params = CarryParams(
+            "BTC",
+            "binance",
+            "bybit",
+            entry_spread=99.0,
+            exit_spread=0.01,
+            max_holding_epochs=100,
+        )
         result = evaluate_carry(spreads, params)
         assert result.n_trades == 0
         assert result.total_carry_pnl == 0.0
@@ -161,9 +191,14 @@ class TestEvaluateCarry:
 
     def test_single_trade_metrics(self):
         spreads = _make_spreads_df(n_epochs=50, spread=0.001)
-        params = CarryParams("BTC", "binance", "bybit",
-                             entry_spread=0.10, exit_spread=0.01,
-                             max_holding_epochs=100)
+        params = CarryParams(
+            "BTC",
+            "binance",
+            "bybit",
+            entry_spread=0.10,
+            exit_spread=0.01,
+            max_holding_epochs=100,
+        )
         result = evaluate_carry(spreads, params)
         assert isinstance(result, GridSearchResult)
         if result.n_trades > 0:
@@ -172,9 +207,14 @@ class TestEvaluateCarry:
 
     def test_win_rate_bounds(self):
         spreads = _make_spreads_df(n_epochs=100, spread=0.001)
-        params = CarryParams("BTC", "binance", "bybit",
-                             entry_spread=0.10, exit_spread=0.01,
-                             max_holding_epochs=10)
+        params = CarryParams(
+            "BTC",
+            "binance",
+            "bybit",
+            entry_spread=0.10,
+            exit_spread=0.01,
+            max_holding_epochs=10,
+        )
         result = evaluate_carry(spreads, params)
         assert 0.0 <= result.win_rate <= 1.0
 
@@ -200,8 +240,12 @@ class TestGridSearchParams:
     def test_exit_ge_entry_skipped(self):
         spreads = _make_spreads_df(n_epochs=50, spread=0.001)
         results = grid_search_params(
-            spreads, "BTC", "binance", "bybit",
-            entry_spreads=[0.05], exit_spreads=[0.05, 0.10],
+            spreads,
+            "BTC",
+            "binance",
+            "bybit",
+            entry_spreads=[0.05],
+            exit_spreads=[0.05, 0.10],
             max_holding_epochs_list=[15],
         )
         # exit >= entry should be skipped, so 0 results
@@ -210,8 +254,12 @@ class TestGridSearchParams:
     def test_custom_grids(self):
         spreads = _make_spreads_df(n_epochs=50, spread=0.001)
         results = grid_search_params(
-            spreads, "BTC", "binance", "bybit",
-            entry_spreads=[0.10], exit_spreads=[0.02],
+            spreads,
+            "BTC",
+            "binance",
+            "bybit",
+            entry_spreads=[0.10],
+            exit_spreads=[0.02],
             max_holding_epochs_list=[15],
         )
         assert len(results) == 1

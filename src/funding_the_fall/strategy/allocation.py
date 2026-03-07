@@ -106,6 +106,7 @@ def allocate_positions(
         total_spread = sum(abs(s.spread) for s in entries) or 1.0
         for sig in entries:
             weight = abs(sig.spread) / total_spread
+<<<<<<< HEAD
             pair_margin = carry_margin_budget * weight
             leg_collateral = pair_margin / 2
             leg_notional = leg_collateral * carry_leverage
@@ -129,6 +130,29 @@ def allocate_positions(
                 leverage=carry_leverage,
                 strategy="carry",
             ))
+=======
+            leg_notional = carry_budget * weight
+            targets.append(
+                PositionTarget(
+                    timestamp=sig.timestamp,
+                    coin=sig.coin,
+                    venue=sig.long_venue,
+                    side="long",
+                    notional_usd=leg_notional,
+                    strategy="carry",
+                )
+            )
+            targets.append(
+                PositionTarget(
+                    timestamp=sig.timestamp,
+                    coin=sig.coin,
+                    venue=sig.short_venue,
+                    side="short",
+                    notional_usd=leg_notional,
+                    strategy="carry",
+                )
+            )
+>>>>>>> b952546 (chore(fmt): ruff format)
 
     # --- Cascade leg: directional short, conservative leverage ------------
     cascade_margin_budget = CASCADE_MAX_WEIGHT * nav * risk_score
@@ -142,6 +166,7 @@ def allocate_positions(
         total_amp = sum(amps.values()) or 1.0
         for coin, amp in amps.items():
             weight = amp / total_amp
+<<<<<<< HEAD
             coin_collateral = cascade_margin_budget * weight
             coin_notional = coin_collateral * cascade_leverage
             targets.append(PositionTarget(
@@ -154,6 +179,20 @@ def allocate_positions(
                 leverage=cascade_leverage,
                 strategy="cascade",
             ))
+=======
+            targets.append(
+                PositionTarget(
+                    timestamp=carry_signals[0].timestamp
+                    if carry_signals
+                    else pd.Timestamp.now(),
+                    coin=coin,
+                    venue=deepest_venue,
+                    side="short",
+                    notional_usd=cascade_budget * weight,
+                    strategy="cascade",
+                )
+            )
+>>>>>>> b952546 (chore(fmt): ruff format)
 
     # --- Risk limit enforcement -------------------------------------------
     targets = _enforce_risk_limits(
@@ -193,7 +232,16 @@ def _enforce_risk_limits(
     max_gross = max_gross_leverage * nav
     if gross > max_gross:
         scale = max_gross / gross
+<<<<<<< HEAD
         targets = [_scale_target(t, scale) for t in targets]
+=======
+        targets = [
+            PositionTarget(
+                t.timestamp, t.coin, t.venue, t.side, t.notional_usd * scale, t.strategy
+            )
+            for t in targets
+        ]
+>>>>>>> b952546 (chore(fmt): ruff format)
 
     # 2. Single-exchange concentration cap
     max_venue = max_single_exchange_pct * nav
@@ -205,23 +253,41 @@ def _enforce_risk_limits(
     )
     if worst_venue_ratio > 1.0:
         scale = 1.0 / worst_venue_ratio
+<<<<<<< HEAD
         targets = [_scale_target(t, scale) for t in targets]
+=======
+        targets = [
+            PositionTarget(
+                t.timestamp, t.coin, t.venue, t.side, t.notional_usd * scale, t.strategy
+            )
+            for t in targets
+        ]
+>>>>>>> b952546 (chore(fmt): ruff format)
 
     # 3. Net delta cap
-    net_delta = sum(
-        t.notional_usd * (1 if t.side == "long" else -1) for t in targets
-    )
+    net_delta = sum(t.notional_usd * (1 if t.side == "long" else -1) for t in targets)
     max_delta = max_net_delta_pct * nav
     if abs(net_delta) > max_delta and abs(net_delta) > 0:
         excess = abs(net_delta) - max_delta
         dominant_side = "long" if net_delta > 0 else "short"
-        side_total = sum(
-            t.notional_usd for t in targets if t.side == dominant_side
-        )
+        side_total = sum(t.notional_usd for t in targets if t.side == dominant_side)
         if side_total > 0:
             scale = max((side_total - excess) / side_total, 0.0)
             targets = [
+<<<<<<< HEAD
                 _scale_target(t, scale) if t.side == dominant_side else t
+=======
+                PositionTarget(
+                    t.timestamp,
+                    t.coin,
+                    t.venue,
+                    t.side,
+                    t.notional_usd * scale
+                    if t.side == dominant_side
+                    else t.notional_usd,
+                    t.strategy,
+                )
+>>>>>>> b952546 (chore(fmt): ruff format)
                 for t in targets
             ]
 

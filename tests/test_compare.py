@@ -22,10 +22,27 @@ from funding_the_fall.models.kou import KouParams
 class TestModelComparison:
     @staticmethod
     def _make_comparison():
-        m = MertonParams(sigma=0.01, lam=0.1, mu_j=-0.05, sigma_j=0.02, mu=0.0,
-                         log_likelihood=-100, aic=210, bic=220)
-        k = KouParams(sigma=0.01, lam=0.1, p=0.4, eta1=10.0, eta2=5.0, mu=0.0,
-                      log_likelihood=-95, aic=202, bic=215)
+        m = MertonParams(
+            sigma=0.01,
+            lam=0.1,
+            mu_j=-0.05,
+            sigma_j=0.02,
+            mu=0.0,
+            log_likelihood=-100,
+            aic=210,
+            bic=220,
+        )
+        k = KouParams(
+            sigma=0.01,
+            lam=0.1,
+            p=0.4,
+            eta1=10.0,
+            eta2=5.0,
+            mu=0.0,
+            log_likelihood=-95,
+            aic=202,
+            bic=215,
+        )
         return ModelComparison(coin="BTC", n_obs=200, merton=m, kou=k, preferred="kou")
 
     def test_fields(self):
