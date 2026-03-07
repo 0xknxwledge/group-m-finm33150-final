@@ -11,7 +11,7 @@ FINM 33150 — Winter 2026
 | Member | Module | Path |
 |--------|--------|------|
 | **John Beecher** | Data Pipeline + Models (Merton + Kou) | `src/funding_the_fall/data/`, `src/funding_the_fall/models/` |
-| **Antonio Braz** | Cascade Simulator | `src/funding_the_fall/models/cascade.py` |
+| **Antonio Braz** | Cascade Simulator + Data Storage | `src/funding_the_fall/models/cascade.py`, `src/funding_the_fall/data/storage.py` |
 | **Jean-Luc Choiseul** | Strategy (Carry + Allocation) | `src/funding_the_fall/strategy/` |
 | **Jean Mauratille** | Backtester + Transaction Costs | `src/funding_the_fall/backtest/` |
 
@@ -111,6 +111,10 @@ OXARCHIVE_API_KEY=<key> PYTHONPATH=src python scripts/pull_data.py --quick --coi
 ## Phase 2b — Cascade Simulator (Antonio) -- COMPLETE
 
 `models/cascade.py` (~280 lines): `simulate_cascade`, `compute_amplification_curve`, `cascade_risk_signal`, `build_positions_from_oi`, sensitivity functions. All implemented and used in notebook section 4.
+
+## Data Storage (Antonio) -- DONE
+
+`data/storage.py`: polars-first parquet save/load layer with pandas compat aliases. Typed loaders: `load_funding()`, `load_candles()`, `load_oi()`, `load_orderbook_depth()`, `load_liquidation_volume()`. `DATA_DIR` resolves relative to source file for portability.
 
 ---
 
