@@ -1,4 +1,4 @@
-.PHONY: sync test lab lint format clean pitchbook pitchbook-watch
+.PHONY: sync test lab lint format clean figures pitchbook pitchbook-watch
 
 sync:
 	uv sync
@@ -14,6 +14,9 @@ lint:
 
 format:
 	uv run ruff format src/ tests/
+
+figures:
+	PYTHONPATH=src uv run python scripts/export_figures.py
 
 pitchbook:
 	typst compile pitchbook/main.typ pitchbook/pitchbook.pdf
