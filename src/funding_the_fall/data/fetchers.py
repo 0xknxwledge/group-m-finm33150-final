@@ -361,7 +361,7 @@ def _0xa_get(
 
         if not paginate:
             break
-        next_cursor = body.get("meta", {}).get("nextCursor")
+        next_cursor = body.get("meta", {}).get("next_cursor")
         if not next_cursor or not data:
             break
         params["cursor"] = next_cursor
@@ -393,12 +393,15 @@ def _fetch_funding_0xa(
     venue_name: str,
     days: int = 90,
 ) -> pl.DataFrame:
-    """Fetch funding from 0xArchive for Hyperliquid or Lighter."""
+    """Fetch funding from 0xArchive for Hyperliquid or Lighter.
+
+    Both report 8h rates but settle hourly (paying rate/8 each hour).
+    """
     end_ms = int(time.time() * 1000)
     start_ms = end_ms - (days * 24 * 3600 * 1000)
     data = _0xa_get(
         f"/v1/{venue_path}/funding/{coin}",
-        params={"start": str(start_ms), "end": str(end_ms), "limit": "1000"},
+        params={"start": str(start_ms), "end": str(end_ms), "interval": "1h", "limit": "1000"},
         paginate=True,
     )
     if not data:
@@ -463,59 +466,41 @@ def _fetch_oi_0xa(
     venue_name: str,
     days: int = 90,
 ) -> pl.DataFrame:
-    """Fetch historical OI from 0xArchive for Hyperliquid or Lighter."""
+    """Fetch historical OI from 0xArchive for Hyperliquid or Lighter.
+
+    Hyperliquid returns OI in base asset (e.g. BTC) → multiply by mark_price.
+    Lighter returns OI already in USD → use directly.
+    """
     end_ms = int(time.time() * 1000)
     start_ms = end_ms - (days * 24 * 3600 * 1000)
     data = _0xa_get(
         f"/v1/{venue_path}/openinterest/{coin}",
-        params={"start": str(start_ms), "end": str(end_ms), "limit": "1000"},
+        params={"start": str(start_ms), "end": str(end_ms), "interval": "1h", "limit": "1000"},
         paginate=True,
     )
     if not data:
         return _empty(_OI_SCHEMA)
 
     df = pl.DataFrame(data)
+
+    if venue_name == "lighter":
+        # Lighter OI is already denominated in USD (quote currency)
+        oi_expr = pl.col("open_interest").cast(pl.Float64).alias("oi_usd")
+    else:
+        # Hyperliquid OI is in base asset — convert to USD
+        oi_expr = (
+            pl.col("open_interest").cast(pl.Float64)
+            * pl.col("mark_price").cast(pl.Float64)
+        ).alias("oi_usd")
+
     df = df.with_columns(
         _parse_0xa_ts().alias("timestamp"),
         pl.lit(venue_name).alias("venue"),
         pl.lit(coin).alias("coin"),
-        (
-            pl.col("open_interest").cast(pl.Float64)
-            * pl.col("mark_price").cast(pl.Float64)
-        ).alias("oi_usd"),
+        oi_expr,
     ).select("timestamp", "venue", "coin", "oi_usd")
     return df.unique(subset=["timestamp", "coin"]).sort("timestamp")
 
-
-# ── 0xArchive liquidations (Hyperliquid only, May 2025+) ──
-
-
-def _fetch_liquidations_0xa(coin: str, days: int = 90) -> pl.DataFrame:
-    """Fetch liquidations from 0xArchive (Hyperliquid only, May 2025+)."""
-    # Liquidation data starts May 2025 — cap lookback to 300 days
-    days = min(days, 300)
-    end_ms = int(time.time() * 1000)
-    start_ms = end_ms - (days * 24 * 3600 * 1000)
-    data = _0xa_get(
-        f"/v1/hyperliquid/liquidations/{coin}",
-        params={"start": str(start_ms), "end": str(end_ms), "limit": "1000"},
-        paginate=True,
-    )
-    if not data:
-        return _empty(_LIQ_SCHEMA)
-
-    df = pl.DataFrame(data)
-    df = df.with_columns(
-        _parse_0xa_ts().alias("timestamp"),
-        pl.lit("hyperliquid").alias("venue"),
-        pl.lit(coin).alias("coin"),
-        pl.col("side").cast(pl.Utf8),
-        (pl.col("price").cast(pl.Float64) * pl.col("size").cast(pl.Float64)).alias(
-            "size_usd"
-        ),
-        pl.col("price").cast(pl.Float64),
-    ).select("timestamp", "venue", "coin", "side", "size_usd", "price")
-    return df.sort("timestamp")
 
 
 # ── 0xArchive prices (for lending module) ──
@@ -662,7 +647,11 @@ def _fetch_candles_okx(
 
 
 def _fetch_oi_okx(coin: str) -> pl.DataFrame:
-    """Fetch current OI snapshot from OKX."""
+    """Fetch current OI snapshot from OKX.
+
+    /api/v5/public/open-interest returns OI in contracts (base asset).
+    We fetch the mark price from /api/v5/public/mark-price to convert to USD.
+    """
     sym = OKX_SYMBOLS.get(coin)
     if not sym:
         return _empty(_OI_SCHEMA)
@@ -671,60 +660,23 @@ def _fetch_oi_okx(coin: str) -> pl.DataFrame:
     if not data:
         return _empty(_OI_SCHEMA)
 
+    oi_contracts = float(data[0].get("oi", 0))
+
+    # Fetch mark price for USD conversion
+    mark_data = _okx_get("/api/v5/public/mark-price", {"instType": "SWAP", "instId": sym})
+    mark_price = float(mark_data[0].get("markPx", 0)) if mark_data else 0
+
     now = datetime.now(timezone.utc)
-    # OI is in contracts; multiply by price to get USD
-    oi_val = float(data[0].get("oi", 0))
-    # Use last price as proxy (not available directly; set oi_usd = oi for now)
     return pl.DataFrame(
         [
             {
                 "timestamp": now,
                 "venue": "okx",
                 "coin": coin,
-                "oi_usd": oi_val,
+                "oi_usd": oi_contracts * mark_price,
             }
         ]
     ).cast({"timestamp": pl.Datetime("us", "UTC")})
-
-
-def _fetch_liquidations_okx(coin: str) -> pl.DataFrame:
-    """Fetch recent liquidation orders from OKX."""
-    sym = OKX_SYMBOLS.get(coin)
-    if not sym:
-        return _empty(_LIQ_SCHEMA)
-
-    # OKX requires 'uly' (underlying) not 'instId' for liquidations
-    uly = sym.replace("-SWAP", "")
-    data = _okx_get(
-        "/api/v5/public/liquidation-orders",
-        {"instType": "SWAP", "uly": uly, "state": "filled"},
-    )
-    if not data:
-        return _empty(_LIQ_SCHEMA)
-
-    rows = []
-    for entry in data:
-        details = entry.get("details", [])
-        for d in details:
-            rows.append(
-                {
-                    "timestamp": int(d.get("ts", "0")),
-                    "venue": "okx",
-                    "coin": coin,
-                    "side": d.get("side", "unknown"),
-                    "size_usd": float(d.get("sz", 0)) * float(d.get("bkPx", 0)),
-                    "price": float(d.get("bkPx", 0)),
-                }
-            )
-    if not rows:
-        return _empty(_LIQ_SCHEMA)
-
-    df = pl.DataFrame(rows)
-    df = df.with_columns(
-        _epoch_ms_to_dt("timestamp").alias("timestamp"),
-    )
-    return df.sort("timestamp")
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Kraken Futures (free, no auth, works from US)
@@ -734,7 +686,7 @@ def _fetch_liquidations_okx(coin: str) -> pl.DataFrame:
 def _fetch_funding_kraken(coin: str, days: int = 90) -> pl.DataFrame:
     """Fetch historical funding rates from Kraken Futures.
 
-    Kraken returns hourly funding; we aggregate to 8h to match other venues.
+    Kraken reports per-hour rates (relativeFundingRate), settled hourly.
     """
     sym = KRAKEN_SYMBOLS.get(coin)
     if not sym:
@@ -774,23 +726,13 @@ def _fetch_funding_kraken(coin: str, days: int = 90) -> pl.DataFrame:
     if not rows:
         return _empty(_FUNDING_SCHEMA)
 
+    # Kraken reports 1h rates (relativeFundingRate), settled hourly
     df = pl.DataFrame(rows).cast({"timestamp": pl.Datetime("us", "UTC")})
-    # Aggregate hourly → 8h: truncate to 8h periods and sum
-    df = df.with_columns(
-        pl.col("timestamp").dt.truncate("8h").alias("period"),
-    )
-    df = (
-        df.group_by("period")
-        .agg(
-            pl.col("funding_rate").sum(),
-        )
-        .rename({"period": "timestamp"})
-    )
     df = df.with_columns(
         pl.lit("kraken").alias("venue"),
         pl.lit(coin).alias("coin"),
     ).select("timestamp", "venue", "coin", "funding_rate")
-    return df.sort("timestamp")
+    return df.unique(subset=["timestamp"]).sort("timestamp")
 
 
 def _fetch_candles_kraken(
@@ -975,7 +917,11 @@ def _fetch_candles_binance(
 
 
 def _fetch_oi_binance(coin: str) -> pl.DataFrame:
-    """Fetch current OI from Binance Futures."""
+    """Fetch current OI from Binance Futures.
+
+    /fapi/v1/openInterest returns OI in base asset (contracts).
+    We fetch the mark price from /fapi/v1/premiumIndex to convert to USD.
+    """
     sym = BINANCE_SYMBOLS.get(coin)
     if not sym:
         return _empty(_OI_SCHEMA)
@@ -987,6 +933,17 @@ def _fetch_oi_binance(coin: str) -> pl.DataFrame:
     )
     resp.raise_for_status()
     data = resp.json()
+    oi_contracts = float(data.get("openInterest", 0))
+
+    # Fetch mark price for USD conversion
+    resp2 = requests.get(
+        f"{BINANCE_FAPI}/premiumIndex",
+        params={"symbol": sym},
+        timeout=30,
+    )
+    resp2.raise_for_status()
+    mark_price = float(resp2.json().get("markPrice", 0))
+
     now = datetime.now(timezone.utc)
     return pl.DataFrame(
         [
@@ -994,68 +951,10 @@ def _fetch_oi_binance(coin: str) -> pl.DataFrame:
                 "timestamp": now,
                 "venue": "binance",
                 "coin": coin,
-                "oi_usd": float(data.get("openInterest", 0)),
+                "oi_usd": oi_contracts * mark_price,
             }
         ]
     ).cast({"timestamp": pl.Datetime("us", "UTC")})
-
-
-def _fetch_liquidations_binance(coin: str, days: int = 30) -> pl.DataFrame:
-    """Fetch recent forced liquidation orders from Binance (VPN + API key + HMAC).
-
-    Requires BINANCE_API_KEY and BINANCE_SECRET env vars.
-    The /fapi/v1/forceOrders endpoint is signed (mandatory timestamp param).
-    """
-    api_key = os.environ.get("BINANCE_API_KEY", "")
-    secret = os.environ.get("BINANCE_SECRET", "")
-    if not api_key or not secret:
-        return _empty(_LIQ_SCHEMA)
-
-    sym = BINANCE_SYMBOLS.get(coin)
-    if not sym:
-        return _empty(_LIQ_SCHEMA)
-
-    import hashlib
-    import hmac
-    import urllib.parse
-
-    ts = str(int(time.time() * 1000))
-    params = {
-        "symbol": sym,
-        "autoCloseType": "LIQUIDATION",
-        "limit": "100",
-        "timestamp": ts,
-    }
-    query = urllib.parse.urlencode(params)
-    signature = hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
-    params["signature"] = signature
-
-    resp = requests.get(
-        f"{BINANCE_FAPI}/forceOrders",
-        params=params,
-        headers={"X-MBX-APIKEY": api_key},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    if not data:
-        return _empty(_LIQ_SCHEMA)
-
-    rows = []
-    for d in data:
-        rows.append(
-            {
-                "timestamp": int(d.get("time", 0)),
-                "venue": "binance",
-                "coin": coin,
-                "side": d.get("side", "unknown").lower(),
-                "size_usd": float(d.get("price", 0)) * float(d.get("origQty", 0)),
-                "price": float(d.get("price", 0)),
-            }
-        )
-    df = pl.DataFrame(rows)
-    df = df.with_columns(_epoch_ms_to_dt("timestamp").alias("timestamp"))
-    return df.sort("timestamp")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1180,7 +1079,11 @@ def _fetch_candles_bybit(
 
 
 def _fetch_oi_bybit(coin: str) -> pl.DataFrame:
-    """Fetch current OI from Bybit."""
+    """Fetch current OI from Bybit.
+
+    /v5/market/open-interest returns OI in base asset (contracts).
+    We fetch the mark price from /v5/market/tickers to convert to USD.
+    """
     sym = BYBIT_SYMBOLS.get(coin)
     if not sym:
         return _empty(_OI_SCHEMA)
@@ -1201,6 +1104,18 @@ def _fetch_oi_bybit(coin: str) -> pl.DataFrame:
     if not data:
         return _empty(_OI_SCHEMA)
 
+    oi_contracts = float(data[0].get("openInterest", 0))
+
+    # Fetch mark price for USD conversion
+    resp2 = requests.get(
+        f"{BYBIT_API}/market/tickers",
+        params={"category": "linear", "symbol": sym},
+        timeout=30,
+    )
+    resp2.raise_for_status()
+    tickers = resp2.json().get("result", {}).get("list", [])
+    mark_price = float(tickers[0].get("markPrice", 0)) if tickers else 0
+
     now = datetime.now(timezone.utc)
     return pl.DataFrame(
         [
@@ -1208,29 +1123,11 @@ def _fetch_oi_bybit(coin: str) -> pl.DataFrame:
                 "timestamp": now,
                 "venue": "bybit",
                 "coin": coin,
-                "oi_usd": float(data[0].get("openInterest", 0)),
+                "oi_usd": oi_contracts * mark_price,
             }
         ]
     ).cast({"timestamp": pl.Datetime("us", "UTC")})
 
-
-def _fetch_liquidations_bybit(coin: str, days: int = 30) -> pl.DataFrame:
-    """Fetch recent liquidations from Bybit (VPN)."""
-    sym = BYBIT_SYMBOLS.get(coin)
-    if not sym:
-        return _empty(_LIQ_SCHEMA)
-
-    resp = requests.get(
-        f"{BYBIT_API}/market/recent-trade",
-        params={"category": "linear", "symbol": sym, "limit": 100},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    resp.json()  # validate response
-    # Filter for liquidation trades (isBlockTrade or check side)
-    # Bybit doesn't have a dedicated liquidation endpoint in v5 public API.
-    # Return empty for now — liquidations come from 0xArchive + OKX + Binance.
-    return _empty(_LIQ_SCHEMA)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1294,25 +1191,13 @@ def _fetch_funding_dydx(coin: str, days: int = 90) -> pl.DataFrame:
     df = df.filter(
         pl.col("timestamp") >= pl.lit(datetime.fromtimestamp(cutoff, tz=timezone.utc))
     )
+    # dYdX reports 1h rates, settled hourly
     df = (
         df.select("timestamp", "venue", "coin", "funding_rate")
         .unique(subset=["timestamp"])
         .sort("timestamp")
     )
-    # dYdX has 1h funding epochs — aggregate to 8h to match other venues
-    df = df.with_columns(pl.col("timestamp").dt.truncate("8h").alias("period"))
-    df = (
-        df.group_by("period")
-        .agg(
-            pl.col("funding_rate").sum(),
-        )
-        .rename({"period": "timestamp"})
-    )
-    df = df.with_columns(
-        pl.lit("dydx").alias("venue"),
-        pl.lit(coin).alias("coin"),
-    ).select("timestamp", "venue", "coin", "funding_rate")
-    return df.sort("timestamp")
+    return df
 
 
 def _fetch_candles_dydx(
@@ -1572,54 +1457,4 @@ def fetch_open_interest(
 
     if not frames:
         return _empty(_OI_SCHEMA)
-    return pl.concat(frames).sort("timestamp")
-
-
-def fetch_liquidations(
-    coins: list[str] | None = None,
-    days: int = 30,
-) -> pl.DataFrame:
-    """Fetch liquidation events from available sources.
-
-    Returns polars DataFrame: [timestamp, venue, coin, side, size_usd, price]
-    Sources: 0xArchive (Hyperliquid), OKX, Binance.
-    """
-    coins = coins or TOKENS
-    frames: list[pl.DataFrame] = []
-
-    for coin in coins:
-        # 0xArchive Hyperliquid liquidations
-        try:
-            df = _fetch_liquidations_0xa(coin, days)
-            if not df.is_empty():
-                frames.append(df)
-        except Exception as e:
-            logger.warning(f"Liquidations 0xArchive/{coin}: {e}")
-
-        # OKX
-        try:
-            df = _fetch_liquidations_okx(coin)
-            if not df.is_empty():
-                frames.append(df)
-        except Exception as e:
-            logger.warning(f"Liquidations OKX/{coin}: {e}")
-
-        # Binance (VPN)
-        try:
-            df = _fetch_liquidations_binance(coin, days)
-            if not df.is_empty():
-                frames.append(df)
-        except Exception as e:
-            logger.warning(f"Liquidations Binance/{coin}: {e}")
-
-        # Bybit (VPN) — returns empty, placeholder
-        try:
-            df = _fetch_liquidations_bybit(coin, days)
-            if not df.is_empty():
-                frames.append(df)
-        except Exception as e:
-            logger.warning(f"Liquidations Bybit/{coin}: {e}")
-
-    if not frames:
-        return _empty(_LIQ_SCHEMA)
     return pl.concat(frames).sort("timestamp")

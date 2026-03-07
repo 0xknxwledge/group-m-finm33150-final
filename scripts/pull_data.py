@@ -19,8 +19,6 @@ Output:
     data/funding_rates.parquet
     data/candles.parquet
     data/open_interest.parquet
-    data/liquidations.parquet
-    data/reserve_prices.parquet
 
 Each file has a 'venue' column so you can filter downstream.
 """
@@ -47,22 +45,18 @@ from funding_the_fall.data.fetchers import (
     _FUNDING_SCHEMA,
     _CANDLE_SCHEMA,
     _OI_SCHEMA,
-    _LIQ_SCHEMA,
     _fetch_funding_0xa,
     _fetch_candles_0xa,
     _fetch_oi_0xa,
-    _fetch_liquidations_0xa,
     _fetch_funding_kraken,
     _fetch_candles_kraken,
     _fetch_oi_kraken,
     _fetch_funding_okx,
     _fetch_candles_okx,
     _fetch_oi_okx,
-    _fetch_liquidations_okx,
     _fetch_funding_binance,
     _fetch_candles_binance,
     _fetch_oi_binance,
-    _fetch_liquidations_binance,
     _fetch_funding_bybit,
     _fetch_candles_bybit,
     _fetch_oi_bybit,
@@ -70,7 +64,6 @@ from funding_the_fall.data.fetchers import (
     _fetch_candles_dydx,
     _fetch_oi_dydx,
 )
-from funding_the_fall.data.lending import fetch_reserve_prices
 from funding_the_fall.data.storage import DATA_DIR, save_parquet_pl
 
 logging.basicConfig(
@@ -257,29 +250,6 @@ def pull_oi(coins: list[str], venues: list[str], days: int) -> pl.DataFrame:
     return pl.concat(frames).sort("timestamp")
 
 
-def pull_liquidations(coins: list[str], days: int) -> pl.DataFrame:
-    """Pull liquidations from available sources."""
-    frames: list[pl.DataFrame] = []
-
-    for coin in coins:
-        df = _safe(_fetch_liquidations_0xa, coin, days,
-                   label=f"liq/0xa/{coin}")
-        if df is not None:
-            frames.append(df)
-
-        df = _safe(_fetch_liquidations_okx, coin, label=f"liq/okx/{coin}")
-        if df is not None:
-            frames.append(df)
-
-        df = _safe(_fetch_liquidations_binance, coin, days,
-                   label=f"liq/binance/{coin}")
-        if df is not None:
-            frames.append(df)
-
-    if not frames:
-        return _empty(_LIQ_SCHEMA)
-    return pl.concat(frames).sort("timestamp")
-
 
 def validate(name: str, df: pl.DataFrame) -> None:
     """Print coverage summary for a dataset."""
@@ -357,26 +327,6 @@ def main():
     if not oi.is_empty():
         save_parquet_pl(oi, "open_interest")
     validate("open_interest", oi)
-    log.info("")
-
-    # ── Liquidations ──
-    log.info("── Liquidations ──")
-    liqs = pull_liquidations(coins, days)
-    if not liqs.is_empty():
-        save_parquet_pl(liqs, "liquidations")
-    validate("liquidations", liqs)
-    log.info("")
-
-    # ── Reserve Prices ──
-    log.info("── Reserve Prices ──")
-    try:
-        prices = fetch_reserve_prices(days=days)
-        if not prices.is_empty():
-            log.info(f"  reserve_prices: {len(prices)} rows")
-        else:
-            log.warning("  reserve_prices: EMPTY")
-    except Exception as e:
-        log.warning(f"  reserve_prices: {e}")
     log.info("")
 
     elapsed = time.time() - t0

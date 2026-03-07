@@ -23,7 +23,7 @@ Everyone writes their own section of the technical notebook and pitchbook.
 
 ## Project Requirements (from QuantTradingProject.pdf)
 
-- [x] Non-standard data source (not equity OHLC/VWAP/volume) — crypto funding rates + on-chain liquidation data
+- [x] Non-standard data source (not equity OHLC/VWAP/volume) — crypto funding rates + OI from on-chain venues
 - [ ] Hold 5+ distinct assets simultaneously — BTC, ETH, SOL, HYPE, DOGE
 - [ ] 40+ trades over simulation period, not excessively clustered
 - [ ] Leverage with documented risk controls
@@ -36,17 +36,17 @@ Everyone writes their own section of the technical notebook and pitchbook.
 
 ---
 
-## Status Overview (as of 2026-03-06)
+## Status Overview (as of 2026-03-07)
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 1. Data Pipeline | **DONE** | 7 venues x 5 coins, 5 parquet files committed |
+| 1. Data Pipeline | **DONE** | 115K funding rows (hourly), 53K OI rows; all unit bugs fixed |
 | 2a. Jump-Diffusion Models | **DONE** | Merton + Kou calibration, model comparison, jump-weighted risk |
 | 2b. Cascade Simulator | **DONE** | All functions implemented (~280 lines) |
 | 3. Carry Strategy | **NOT STARTED** | 3 core functions are stubs |
 | 3. Allocation | **DONE** | `allocate_positions` + `_enforce_risk_limits` implemented |
 | 4. Backtest Engine | **NOT STARTED** | `run_backtest` is a stub |
-| 4. Transaction Costs | **DONE** | Almgren-Chriss fully implemented |
+| 4. Transaction Costs | **DONE** | Almgren-Chriss + all 7 venue perp fees |
 | 4. Performance Analytics | **NOT STARTED** | 2 core functions are stubs |
 | 5. Notebook (EDA + Cascade) | **DONE** | Sections 1-4 complete with plots and prose |
 | 5. Notebook (Strategy-Conclusion) | **NOT STARTED** | Sections 5-9 are placeholders |
@@ -55,27 +55,46 @@ Everyone writes their own section of the technical notebook and pitchbook.
 
 ---
 
-## Phase 1 — Data Pipeline (John) -- COMPLETE
+## Phase 1 — Data Pipeline (John) -- DONE
 
-All data fetching, storage, and validation is done. See `data/fetchers.py` (~1,600 lines), `data/lending.py` (~750 lines), `data/storage.py`.
+See `data/fetchers.py` (~1,600 lines), `data/storage.py`.
 
-### Current dataset (committed in `data/`)
+### Bugs fixed (2026-03-07)
+
+- **Pagination**: 0xArchive API returns `next_cursor` (snake_case); code had `nextCursor` (camelCase). Only first page was ever fetched.
+- **Lighter funding**: needed `interval=1h` parameter; without it, raw ~10s ticks all showed 0.0012.
+- **OI interval**: added `interval=1h` for Hyperliquid/Lighter OI (raw ticks were sub-second frequency).
+- **Lighter OI**: was multiplied by mark_price erroneously (already in USD). Fixed.
+- **Binance/Bybit/OKX OI**: returned in base asset (contracts), not USD. Now fetches mark price and converts.
+- **dYdX/Kraken funding**: removed unnecessary 8h aggregation — kept native 1h rates.
+- **Venue fees**: corrected Hyperliquid (3.5→4.5 bps) and Binance (4→5 bps, was spot fee); added OKX, Kraken, Lighter.
+- **Dead code removed**: liquidations, reserve prices, `lending.py`.
+
+### Funding rate semantics
+
+| Venue | Rate unit | Settlement | Hourly payment |
+|-------|-----------|------------|----------------|
+| Hyperliquid | 8h rate | every 1h | rate / 8 |
+| Lighter | 8h rate | every 1h | rate / 8 |
+| dYdX | 1h rate | every 1h | rate |
+| Kraken | 1h rate | every 1h | rate |
+| Binance | 8h rate | every 8h | forward-fill on 1h grid |
+| Bybit | 8h rate | every 8h | forward-fill on 1h grid |
+| OKX | 8h rate | every 8h | forward-fill on 1h grid |
+
+### Current dataset
 
 | File | Rows | Coverage |
 |------|------|----------|
-| `funding_rates.parquet` | 29,217 | 7 venues x 5 coins, 2025-03 to 2026-03 |
-| `candles.parquet` | ~170K | 7 venues x 5 coins, hourly |
-| `open_interest.parquet` | 10,025 | Historical (HL/Lighter) + snapshots (others) |
-| `liquidations.parquet` | 8,059 | 0xArchive (May 2025+) + OKX |
-| `reserve_prices.parquet` | 3,000 | ETH + USDC/USDT for lending replay |
+| `funding_rates.parquet` | 115,115 | 7 venues × 5 coins, hourly where available |
+| `candles.parquet` | ~170K | 7 venues × 5 coins, hourly |
+| `open_interest.parquet` | 53,282 | Hyperliquid + Lighter hourly; CEXes snapshot only |
 
 ### Re-pulling data
 
-To refresh data (e.g. for a newer window), set `OXARCHIVE_API_KEY` and run:
 ```bash
-PYTHONPATH=src python scripts/pull_data.py                    # full pull
-PYTHONPATH=src python scripts/backfill_data.py                # fix liquidations + dYdX
-PYTHONPATH=src python scripts/pull_data.py --quick --coins BTC  # quick single-coin test
+OXARCHIVE_API_KEY=<key> PYTHONPATH=src python scripts/pull_data.py          # full pull (364 days)
+OXARCHIVE_API_KEY=<key> PYTHONPATH=src python scripts/pull_data.py --quick --coins BTC  # quick test
 ```
 
 ---
@@ -113,7 +132,7 @@ PYTHONPATH=src python scripts/pull_data.py --quick --coins BTC  # quick single-c
 
 `backtest/costs.py` is done (Almgren-Chriss). Everything else is stubs:
 
-- [ ] **`run_backtest()`** (`backtest/engine.py`) — event loop over 8h epochs
+- [ ] **`run_backtest()`** (`backtest/engine.py`) — event loop over 1h epochs
 - [ ] **`compute_performance()`** (`backtest/performance.py`) — Sharpe, drawdown, Calmar, win rate
 - [ ] **`pnl_decomposition()`** (`backtest/performance.py`) — carry vs cascade vs costs
 - [ ] **Two scenarios**: (A) zero costs, (B) calibrated Almgren-Chriss
@@ -123,8 +142,8 @@ PYTHONPATH=src python scripts/pull_data.py --quick --coins BTC  # quick single-c
 
 ## Phase 5 — Deliverables (All) -- PARTIALLY STARTED
 
-- [x] **Notebook sections 1-4** (Setup, EDA, Jump-Diffusion placeholders, Cascade) — done
-- [ ] **Notebook section 3** — fill in once Merton/Kou calibration works (John)
+- [x] **Notebook sections 1-4** (Setup, EDA, Jump-Diffusion, Cascade) — done
+- [x] **Notebook section 3** — Merton/Kou calibration, QQ plots, tail fit, jump-weighted risk (John)
 - [ ] **Notebook sections 5-6** — carry strategy + allocation (Jean-Luc)
 - [ ] **Notebook sections 7-8** — backtest + performance (Jean)
 - [ ] **Notebook section 9** — conclusion with final numbers (All)
@@ -143,7 +162,7 @@ These require a sentence or two in the notebook justifying the choice (per profe
 - Why 5x leverage cap?
 - Why 85/15 carry/cascade split?
 - Why these 5 tokens?
-- Why Kou preferred over Merton? (show AIC/BIC comparison, asymmetric tails argument)
+- Why Merton preferred over Kou? (show AIC/BIC comparison, symmetric tails at hourly frequency)
 - Why not CGMY? (overkill for discrete large events, hard to calibrate/explain)
 - Grid search results: which entry/exit thresholds won per pair, and why?
 - Square-root impact vs linear temporary impact assumption

@@ -81,21 +81,3 @@ def load_oi() -> pl.DataFrame:
     return load_parquet_pl("open_interest")
 
 
-def load_liquidations() -> pl.DataFrame:
-    """Load the unified liquidation events dataset."""
-    return load_parquet_pl("liquidations")
-
-
-def load_lending() -> pl.DataFrame:
-    """Load the unified lending positions dataset."""
-    return load_parquet_pl("lending_positions")
-
-
-def load_lending_events() -> pl.DataFrame:
-    """Load raw HyperLend event logs (polars)."""
-    return load_parquet_pl("lending_events")
-
-
-def load_lending_history() -> pl.DataFrame:
-    """Load replayed historical lending positions (polars)."""
-    return load_parquet_pl("lending_history")

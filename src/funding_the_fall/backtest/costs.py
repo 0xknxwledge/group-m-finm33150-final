@@ -74,11 +74,14 @@ class TransactionCostModel:
         return permanent + fixed + temporary
 
 
-# ── Per-venue fee schedules (taker fees) ──
+# ── Per-venue fee schedules (perp futures taker fees, base tier) ──
 VENUE_FEES: dict[str, float] = {
-    "hyperliquid": 0.00035,  # 3.5 bps taker
-    "binance": 0.0004,  # 4 bps taker (VIP0)
+    "hyperliquid": 0.00045,  # 4.5 bps taker
+    "lighter": 0.0,  # zero-fee DEX (standard accounts)
+    "binance": 0.0005,  # 5 bps taker (VIP0, USDM futures)
     "bybit": 0.00055,  # 5.5 bps taker
+    "okx": 0.0005,  # 5 bps taker
+    "kraken": 0.0005,  # 5 bps taker
     "dydx": 0.0005,  # 5 bps taker
 }
 

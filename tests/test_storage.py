@@ -174,16 +174,3 @@ class TestLoadOI:
             assert col in df.columns
 
 
-@pytest.mark.integration
-class TestLoadLiquidations:
-    @pytest.fixture(autouse=True)
-    def _use_real_dir(self, monkeypatch):
-        monkeypatch.setattr(storage, "DATA_DIR", DATA_DIR)
-        if not (DATA_DIR / "liquidations.parquet").exists():
-            pytest.skip("liquidations.parquet not present")
-
-    def test_returns_dataframe_with_expected_columns(self):
-        df = storage.load_liquidations()
-        assert isinstance(df, pl.DataFrame)
-        for col in ("timestamp", "venue", "coin", "side", "size_usd", "price"):
-            assert col in df.columns

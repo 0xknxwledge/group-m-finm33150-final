@@ -167,11 +167,13 @@ class TestImplementationShortfall:
 
 class TestVenueFees:
     def test_expected_keys(self):
-        assert set(VENUE_FEES.keys()) == {"hyperliquid", "binance", "bybit", "dydx"}
+        assert set(VENUE_FEES.keys()) == {
+            "hyperliquid", "lighter", "binance", "bybit", "okx", "kraken", "dydx",
+        }
 
-    def test_values_positive(self):
+    def test_values_non_negative(self):
         for venue, fee in VENUE_FEES.items():
-            assert fee > 0, f"{venue} fee should be positive"
+            assert fee >= 0, f"{venue} fee should be non-negative"
 
 
 # ---------------------------------------------------------------------------
