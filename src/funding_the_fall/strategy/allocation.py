@@ -56,6 +56,7 @@ def allocate_positions(
     deepest_venue: str = "binance",
     carry_leverage: float = 4.0,
     cascade_leverage: float = 1.5,
+    cascade_top_n: int = 2,
     max_gross_leverage: float = 5.0,
     max_single_exchange_pct: float = 0.40,
     max_net_delta_pct: float = 0.10,
@@ -130,18 +131,21 @@ def allocate_positions(
                 strategy="carry",
             ))
 
-    # --- Cascade leg: directional short, conservative leverage ------------
+    # --- Cascade leg: directional short on top-N riskiest coins -----------
     cascade_margin_budget = CASCADE_MAX_WEIGHT * nav * risk_score
 
     if cascade_margin_budget > 0 and per_coin_signals:
-        amps = {
-            coin: sig.get("amplification_at_5pct", 1.0)
+        # Weight by OI/depth risk score (not amplification — A(5%) is binary)
+        scores = {
+            coin: sig.get("risk_score", 0.0)
             for coin, sig in per_coin_signals.items()
         }
-        amps = {c: a for c, a in amps.items() if a > 1.0}
-        total_amp = sum(amps.values()) or 1.0
-        for coin, amp in amps.items():
-            weight = amp / total_amp
+        # Only short coins above threshold, limited to top N
+        scores = {c: s for c, s in scores.items() if s > 0.5}
+        top_coins = sorted(scores, key=scores.get, reverse=True)[:cascade_top_n]
+        total_score = sum(scores[c] for c in top_coins) or 1.0
+        for coin in top_coins:
+            weight = scores[coin] / total_score
             coin_collateral = cascade_margin_budget * weight
             coin_notional = coin_collateral * cascade_leverage
             targets.append(PositionTarget(

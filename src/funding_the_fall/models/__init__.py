@@ -14,6 +14,8 @@ from funding_the_fall.models.cascade import (
     sensitivity_to_depth,
     depth_by_coin,
     validate_cascade,
+    CascadeSignal,
+    generate_cascade_signals,
     MAX_LEVERAGE,
 )
 from funding_the_fall.models.risk import jump_weighted_risk, jump_weighted_risk_all_coins
@@ -35,6 +37,8 @@ __all__ = [
     "depth_by_coin",
     "build_positions_tiered",
     "validate_cascade",
+    "CascadeSignal",
+    "generate_cascade_signals",
     "MAX_LEVERAGE",
     "jump_weighted_risk",
     "jump_weighted_risk_all_coins",

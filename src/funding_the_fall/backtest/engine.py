@@ -6,7 +6,7 @@ Processes funding epochs sequentially:
   1. Mark-to-market all positions using current prices
   2. Apply funding payments to open positions
   3. Check liquidations (isolated margin per position)
-  4. Process pre-computed carry signals (open/close positions)
+  4. Process pre-computed carry + cascade signals (open/close positions)
   5. Record portfolio state
 
 Produces a trade log and a time series of portfolio state.
@@ -147,6 +147,10 @@ def run_backtest(
     initial_nav: float = 1_000_000.0,
     carry_leverage: float = 4.0,
     carry_budget_pct: float = 0.85,
+    cascade_signals: list | None = None,
+    cascade_leverage: float = 1.5,
+    cascade_budget_pct: float = 0.15,
+    fee_multiplier: float = 1.0,
 ) -> BacktestResult:
     """Run the full backtest with position-level margin tracking.
 
@@ -164,28 +168,34 @@ def run_backtest(
         Leverage per carry leg (each leg is isolated margin).
     carry_budget_pct : float
         Max fraction of NAV allocated as carry margin.
+    cascade_signals : list of CascadeSignal, optional
+        Pre-computed cascade short entry/exit signals.
+    cascade_leverage : float
+        Leverage for cascade shorts.
+    cascade_budget_pct : float
+        Max fraction of NAV allocated as cascade margin.
 
     Position model
     --------------
     Each carry trade opens two isolated-margin positions (long + short).
-    Collateral per leg = allocated_margin / 2.
-    Notional per leg = collateral * carry_leverage.
-
+    Each cascade trade opens a single short position.
     At each epoch: funding is applied, then liquidation is checked.
-    If one leg of a carry pair is liquidated, the other is force-closed
-    to avoid leaving a naked directional position.
+    If one leg of a carry pair is liquidated, the other is force-closed.
     """
     # Pre-build lookups
     price_lookup = _build_price_lookup(candles_df)
     funding_lookup = _build_funding_lookup(funding_df)
 
-    # Signal index: timestamp -> list of signals
-    signal_index: dict[pd.Timestamp, list] = defaultdict(list)
+    # Signal indices: timestamp -> list of signals
+    carry_index: dict[pd.Timestamp, list] = defaultdict(list)
     for sig in carry_signals:
-        signal_index[sig.timestamp].append(sig)
+        carry_index[sig.timestamp].append(sig)
 
-    # Get sorted unique epochs from price data
-    col = "c" if "c" in candles_df.columns else "close"
+    cascade_index: dict[pd.Timestamp, list] = defaultdict(list)
+    for sig in (cascade_signals or []):
+        cascade_index[sig.timestamp].append(sig)
+
+    # Sorted unique epochs from price data
     epochs = sorted(candles_df["timestamp"].unique())
 
     # State
@@ -206,14 +216,12 @@ def run_backtest(
         for key, price in price_lookup.items():
             if key[0] == ts:
                 prices[key[1]] = price
-
         if not prices:
             continue
 
         # --- 1. Apply funding payments ------------------------------------
         for pos in positions:
             rate = funding_lookup.get((ts, pos.venue, pos.coin), 0.0)
-            # Longs pay, shorts receive (when rate > 0)
             payment = pos.notional * rate * (-1 if pos.side == "long" else 1)
             pos.cumulative_funding += payment
             cumulative_funding += payment
@@ -226,10 +234,11 @@ def run_backtest(
             price = prices.get(pos.coin, pos.entry_price)
             if pos.is_liquidated(price):
                 equity = max(pos.equity(price), 0.0)
-                cash += equity  # return remaining equity
-                cumulative_costs += pos.collateral - equity  # liquidation loss
+                cash += equity
+                cumulative_costs += pos.collateral - equity
                 total_liquidations += 1
-                liquidated_pair_ids.add(pos.pair_id)
+                if pos.strategy == "carry":
+                    liquidated_pair_ids.add(pos.pair_id)
                 all_trades.append(Trade(
                     timestamp=ts, coin=pos.coin, venue=pos.venue,
                     side="close_" + pos.side, notional_usd=pos.notional,
@@ -243,17 +252,17 @@ def run_backtest(
         if liquidated_pair_ids:
             still_alive: list[OpenPosition] = []
             for pos in surviving:
-                if pos.pair_id in liquidated_pair_ids:
+                if pos.pair_id in liquidated_pair_ids and pos.strategy == "carry":
                     price = prices.get(pos.coin, pos.entry_price)
                     equity = pos.equity(price)
-                    exit_fee = VENUE_FEES.get(pos.venue, 0.0005) * pos.notional
+                    exit_fee = VENUE_FEES.get(pos.venue, 0.0005) * pos.notional * fee_multiplier
                     cash += equity - exit_fee
                     cumulative_costs += exit_fee
                     all_trades.append(Trade(
                         timestamp=ts, coin=pos.coin, venue=pos.venue,
                         side="close_" + pos.side, notional_usd=pos.notional,
                         price=price, fee_usd=exit_fee,
-                        strategy=pos.strategy + "_pair_unwind",
+                        strategy="carry_pair_unwind",
                     ))
                 else:
                     still_alive.append(pos)
@@ -261,33 +270,26 @@ def run_backtest(
 
         positions = surviving
 
-        # --- 3. Process carry signals at this timestamp -------------------
-        for sig in signal_index.get(ts, []):
+        # --- 3. Process carry signals -------------------------------------
+        for sig in carry_index.get(ts, []):
             if sig.action == "enter":
                 price = prices.get(sig.coin)
                 if price is None:
                     continue
-
-                # Size: margin-based
                 nav = _compute_nav(cash, positions, prices)
-                used_margin = sum(p.collateral for p in positions)
-                margin_budget = carry_budget_pct * nav
-                remaining_margin = max(margin_budget - used_margin, 0)
-                # Also can't exceed available cash
-                available_cash = cash
-                pair_margin = min(remaining_margin, available_cash)
+                used_carry = sum(p.collateral for p in positions if p.strategy == "carry")
+                remaining = max(carry_budget_pct * nav - used_carry, 0)
+                pair_margin = min(remaining, cash)
                 leg_collateral = pair_margin / 2
                 if leg_collateral <= 0:
                     continue
                 leg_notional = leg_collateral * carry_leverage
 
-                # Fees
-                long_fee = VENUE_FEES.get(sig.long_venue, 0.0005) * leg_notional
-                short_fee = VENUE_FEES.get(sig.short_venue, 0.0005) * leg_notional
+                long_fee = VENUE_FEES.get(sig.long_venue, 0.0005) * leg_notional * fee_multiplier
+                short_fee = VENUE_FEES.get(sig.short_venue, 0.0005) * leg_notional * fee_multiplier
                 entry_cost = long_fee + short_fee
-
                 if entry_cost >= pair_margin:
-                    continue  # fees would eat all margin
+                    continue
 
                 pid = next_pair_id
                 next_pair_id += 1
@@ -304,54 +306,88 @@ def run_backtest(
                     collateral=leg_collateral, leverage=carry_leverage,
                     strategy="carry", entry_timestamp=ts, pair_id=pid,
                 ))
-
                 cash -= pair_margin + entry_cost
                 cumulative_costs += entry_cost
 
-                all_trades.append(Trade(
-                    ts, sig.coin, sig.long_venue, "long",
-                    leg_notional, price, long_fee, "carry",
-                ))
-                all_trades.append(Trade(
-                    ts, sig.coin, sig.short_venue, "short",
-                    leg_notional, price, short_fee, "carry",
-                ))
+                all_trades.append(Trade(ts, sig.coin, sig.long_venue, "long",
+                                        leg_notional, price, long_fee, "carry"))
+                all_trades.append(Trade(ts, sig.coin, sig.short_venue, "short",
+                                        leg_notional, price, short_fee, "carry"))
 
             elif sig.action == "exit":
-                # Close positions matching this signal's venue pair
-                to_close: list[OpenPosition] = []
-                to_keep: list[OpenPosition] = []
+                to_close, to_keep = [], []
                 for pos in positions:
                     if (pos.coin == sig.coin and pos.strategy == "carry"
                             and pos.venue in (sig.long_venue, sig.short_venue)):
                         to_close.append(pos)
                     else:
                         to_keep.append(pos)
-
                 for pos in to_close:
                     price = prices.get(pos.coin, pos.entry_price)
                     equity = pos.equity(price)
-                    exit_fee = VENUE_FEES.get(pos.venue, 0.0005) * pos.notional
+                    exit_fee = VENUE_FEES.get(pos.venue, 0.0005) * pos.notional * fee_multiplier
                     cash += equity - exit_fee
                     cumulative_costs += exit_fee
-                    all_trades.append(Trade(
-                        ts, pos.coin, pos.venue, "close_" + pos.side,
-                        pos.notional, price, exit_fee, "carry",
-                    ))
-
+                    all_trades.append(Trade(ts, pos.coin, pos.venue,
+                                            "close_" + pos.side, pos.notional,
+                                            price, exit_fee, "carry"))
                 positions = to_keep
 
-        # --- 4. Record portfolio state ------------------------------------
+        # --- 4. Process cascade signals -----------------------------------
+        for sig in cascade_index.get(ts, []):
+            if sig.action == "enter":
+                price = prices.get(sig.coin)
+                if price is None:
+                    continue
+                nav = _compute_nav(cash, positions, prices)
+                used_cascade = sum(p.collateral for p in positions if p.strategy == "cascade")
+                remaining = max(cascade_budget_pct * nav - used_cascade, 0)
+                collateral = min(remaining, cash)
+                if collateral <= 0:
+                    continue
+                notional = collateral * cascade_leverage
+
+                fee = VENUE_FEES.get(sig.venue, 0.0005) * notional * fee_multiplier
+                if fee >= collateral:
+                    continue
+
+                positions.append(OpenPosition(
+                    coin=sig.coin, venue=sig.venue, side="short",
+                    entry_price=price, notional=notional,
+                    collateral=collateral, leverage=cascade_leverage,
+                    strategy="cascade", entry_timestamp=ts,
+                ))
+                cash -= collateral + fee
+                cumulative_costs += fee
+                all_trades.append(Trade(ts, sig.coin, sig.venue, "short",
+                                        notional, price, fee, "cascade"))
+
+            elif sig.action == "exit":
+                to_close, to_keep = [], []
+                for pos in positions:
+                    if pos.coin == sig.coin and pos.strategy == "cascade":
+                        to_close.append(pos)
+                    else:
+                        to_keep.append(pos)
+                for pos in to_close:
+                    price = prices.get(pos.coin, pos.entry_price)
+                    equity = pos.equity(price)
+                    exit_fee = VENUE_FEES.get(pos.venue, 0.0005) * pos.notional * fee_multiplier
+                    cash += equity - exit_fee
+                    cumulative_costs += exit_fee
+                    all_trades.append(Trade(ts, pos.coin, pos.venue,
+                                            "close_short", pos.notional,
+                                            price, exit_fee, "cascade"))
+                positions = to_keep
+
+        # --- 5. Record portfolio state ------------------------------------
         nav = _compute_nav(cash, positions, prices)
         gross = sum(p.notional for p in positions)
         net_delta = sum(
             p.notional * (1 if p.side == "long" else -1) for p in positions
         )
-
         states.append(PortfolioState(
-            timestamp=ts,
-            nav=nav,
-            cash=cash,
+            timestamp=ts, nav=nav, cash=cash,
             gross_leverage=gross / nav if nav > 0 else 0.0,
             net_delta_pct=net_delta / nav if nav > 0 else 0.0,
             n_positions=len(positions),

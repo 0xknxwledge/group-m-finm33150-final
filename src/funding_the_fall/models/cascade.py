@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+import pandas as pd
 import polars as pl
 from numpy.typing import NDArray
 
@@ -537,3 +538,82 @@ def validate_cascade(
             "realized_liq_usd": pl.Float64,
         })
     return pl.DataFrame(rows).sort("timestamp")
+
+
+@dataclass
+class CascadeSignal:
+    """A cascade short entry/exit signal."""
+
+    timestamp: pd.Timestamp
+    coin: str
+    venue: str
+    action: str  # "enter" or "exit"
+    risk_score: float
+
+
+def generate_cascade_signals(
+    oi_df: pl.DataFrame,
+    depth_per_coin: dict[str, float],
+    venue: str = "hyperliquid",
+    top_n: int = 2,
+    rebalance_hours: int = 24,
+    risk_threshold: float = 0.5,
+) -> list[CascadeSignal]:
+    """Pre-compute cascade short entry/exit signals from OI time series.
+
+    At each rebalance interval, computes per-coin risk scores and selects
+    the top_n coins above the risk_threshold. Generates enter signals for
+    newly selected coins and exit signals for dropped coins.
+    """
+    timestamps = sorted(oi_df["timestamp"].unique().to_list())
+    if not timestamps:
+        return []
+
+    signals: list[CascadeSignal] = []
+    active: set[str] = set()
+    last_rebalance = None
+
+    for ts in timestamps:
+        if last_rebalance is not None:
+            hours = (ts - last_rebalance).total_seconds() / 3600
+            if hours < rebalance_hours:
+                continue
+
+        last_rebalance = ts
+        snap = oi_df.filter(pl.col("timestamp") == ts)
+
+        coin_risks: dict[str, float] = {}
+        for coin in snap["coin"].unique().to_list():
+            coin_snap = snap.filter(pl.col("coin") == coin)
+            positions = build_positions_tiered(coin_snap)
+            if not positions:
+                continue
+            depth = depth_per_coin.get(coin, DEFAULT_DEPTH_USD)
+            sig = cascade_risk_signal(positions, 1.0, orderbook_depth_usd=depth)
+            coin_risks[coin] = sig["risk_score"]
+
+        eligible = {c: s for c, s in coin_risks.items() if s > risk_threshold}
+        top = set(sorted(eligible, key=eligible.get, reverse=True)[:top_n])
+
+        for coin in top - active:
+            signals.append(CascadeSignal(
+                timestamp=pd.Timestamp(ts), coin=coin, venue=venue,
+                action="enter", risk_score=coin_risks[coin],
+            ))
+        for coin in active - top:
+            signals.append(CascadeSignal(
+                timestamp=pd.Timestamp(ts), coin=coin, venue=venue,
+                action="exit", risk_score=coin_risks.get(coin, 0.0),
+            ))
+        active = top
+
+    # Force exit remaining positions at end of data
+    if active and timestamps:
+        last_ts = pd.Timestamp(timestamps[-1])
+        for coin in active:
+            signals.append(CascadeSignal(
+                timestamp=last_ts, coin=coin, venue=venue,
+                action="exit", risk_score=0.0,
+            ))
+
+    return signals
