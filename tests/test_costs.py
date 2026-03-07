@@ -7,7 +7,9 @@ import pytest
 from funding_the_fall.backtest.costs import (
     VENUE_FEES,
     TransactionCostModel,
+    linear_impact_cost,
     make_cost_model,
+    sqrt_impact_cost,
 )
 
 
@@ -185,6 +187,74 @@ class TestVenueFees:
 # ---------------------------------------------------------------------------
 # make_cost_model
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# sqrt_impact_cost
+# ---------------------------------------------------------------------------
+
+
+class TestSqrtImpactCost:
+    def test_known_value(self):
+        # 10_000 * sqrt(10_000 / 1_000_000) = 10_000 * 0.1 = 1_000
+        assert sqrt_impact_cost(10_000.0, 1_000_000.0) == pytest.approx(1_000.0)
+
+    def test_zero_notional(self):
+        assert sqrt_impact_cost(0.0, 1_000_000.0) == 0.0
+
+    def test_zero_depth(self):
+        assert sqrt_impact_cost(10_000.0, 0.0) == 0.0
+
+    def test_negative_depth(self):
+        assert sqrt_impact_cost(10_000.0, -100.0) == 0.0
+
+    def test_negative_notional_uses_abs(self):
+        assert sqrt_impact_cost(-10_000.0, 1_000_000.0) == pytest.approx(1_000.0)
+
+    def test_small_trade_low_impact(self):
+        # 100 * sqrt(100 / 1_000_000) = 100 * 0.01 = 1.0
+        assert sqrt_impact_cost(100.0, 1_000_000.0) == pytest.approx(1.0)
+
+    def test_thin_book_more_impact(self):
+        thick = sqrt_impact_cost(10_000.0, 1_000_000.0)
+        thin = sqrt_impact_cost(10_000.0, 100_000.0)
+        assert thin > thick
+
+
+# ---------------------------------------------------------------------------
+# make_cost_model
+# ---------------------------------------------------------------------------
+
+
+class TestLinearImpactCost:
+    def test_known_value(self):
+        # 10_000^2 / 1_000_000 = 100
+        assert linear_impact_cost(10_000.0, 1_000_000.0) == pytest.approx(100.0)
+
+    def test_zero_notional(self):
+        assert linear_impact_cost(0.0, 1_000_000.0) == 0.0
+
+    def test_zero_depth(self):
+        assert linear_impact_cost(10_000.0, 0.0) == 0.0
+
+    def test_negative_depth(self):
+        assert linear_impact_cost(10_000.0, -100.0) == 0.0
+
+    def test_greater_than_sqrt_when_notional_exceeds_depth(self):
+        # Linear > sqrt when |V| > D (V/D > 1)
+        notional, depth = 2_000_000.0, 1_000_000.0
+        assert linear_impact_cost(notional, depth) > sqrt_impact_cost(notional, depth)
+
+    def test_less_than_sqrt_when_notional_below_depth(self):
+        # Linear < sqrt when |V| < D (V/D < 1)
+        notional, depth = 100_000.0, 1_000_000.0
+        assert linear_impact_cost(notional, depth) < sqrt_impact_cost(notional, depth)
+
+    def test_equal_at_unit_ratio(self):
+        # When |V|/D = 1: sqrt gives |V|*1=|V|, linear gives V^2/D=|V|
+        assert linear_impact_cost(1000.0, 1000.0) == pytest.approx(
+            sqrt_impact_cost(1000.0, 1000.0)
+        )
 
 
 class TestMakeCostModel:

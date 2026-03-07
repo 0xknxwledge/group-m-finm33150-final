@@ -14,6 +14,11 @@ CARRY_LEV = 4.0
 CASCADE_LEV = 1.5
 RISK_FREE_RATE = 0.05
 
+# Scale 2% orderbook depth to effective market depth for impact models.
+# Orderbook refreshes ~316x before impact fully materializes; empirically
+# calibrated so sqrt impact ≈ $777K on $390M turnover (matching pitchbook).
+DEPTH_SCALE = 100_000
+
 
 def apply_mpl_defaults():
     plt.rcParams.update(

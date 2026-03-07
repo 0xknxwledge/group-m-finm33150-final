@@ -338,7 +338,7 @@ def compute_and_plot_time_varying_risk(
     ax.set_ylabel("Risk Score")
     ax.set_title("Time-Varying Cascade Risk Score (OI/depth-based, per-coin average)")
     ax.set_ylim(-0.05, 1.05)
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=8, loc="upper right")
     fig.tight_layout()
     plt.show()
 

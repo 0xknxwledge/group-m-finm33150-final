@@ -185,9 +185,12 @@ def plot_spread_distributions(spreads: pd.DataFrame):
 
 
 def plot_spread_heatmaps(spreads: pd.DataFrame):
-    fig, axes = plt.subplots(1, 5, figsize=(20, 4), sharey=True)
+    fig = plt.figure(figsize=(22, 4))
+    gs = fig.add_gridspec(1, 6, width_ratios=[1, 1, 1, 1, 1, 0.05], wspace=0.15)
+    axes = [fig.add_subplot(gs[0, i]) for i in range(5)]
+    cax = fig.add_subplot(gs[0, 5])
 
-    for ax, coin in zip(axes, COINS):
+    for i, (ax, coin) in enumerate(zip(axes, COINS)):
         matrix = pd.DataFrame(np.nan, index=VENUE_ORDER, columns=VENUE_ORDER)
         coin_spreads = spreads[spreads["coin"] == coin]
         for (lv, sv), val in (
@@ -202,14 +205,14 @@ def plot_spread_heatmaps(spreads: pd.DataFrame):
         ax.set_xticks(range(len(VENUE_ORDER)))
         ax.set_xticklabels([v[:4] for v in VENUE_ORDER], fontsize=7, rotation=45)
         ax.set_yticks(range(len(VENUE_ORDER)))
-        ax.set_yticklabels([v[:4] for v in VENUE_ORDER] if ax == axes[0] else [], fontsize=7)
+        ax.set_yticklabels([v[:4] for v in VENUE_ORDER] if i == 0 else [], fontsize=7)
         ax.set_title(coin, fontsize=10)
         for k in range(len(VENUE_ORDER)):
             ax.add_patch(
                 plt.Rectangle((k - 0.5, k - 0.5), 1, 1, fill=True, color="gray", alpha=0.3)
             )
 
-    fig.colorbar(im, ax=axes, shrink=0.8, label="Mean Ann. Spread")
-    fig.suptitle("Cross-Venue Mean Annualized Spread (settlement-grid-aligned)", fontsize=12, y=1.02)
-    plt.tight_layout()
+    fig.colorbar(im, cax=cax, label="Mean Ann. Spread")
+    fig.suptitle("Cross-Venue Mean Annualized Spread (settlement-grid-aligned)", fontsize=12)
+    fig.subplots_adjust(top=0.88, bottom=0.15)
     plt.show()

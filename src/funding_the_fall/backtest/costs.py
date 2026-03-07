@@ -86,6 +86,27 @@ VENUE_FEES: dict[str, float] = {
 }
 
 
+def sqrt_impact_cost(notional_usd: float, depth_usd: float) -> float:
+    """Square-root price impact cost: notional * sqrt(notional / depth).
+
+    Returns 0.0 if depth is zero or negative.
+    """
+    if depth_usd <= 0 or notional_usd == 0:
+        return 0.0
+    return abs(notional_usd) * (abs(notional_usd) / depth_usd) ** 0.5
+
+
+def linear_impact_cost(notional_usd: float, depth_usd: float) -> float:
+    """Linear price impact cost: notional^2 / depth.
+
+    Kyle's lambda model: delta_p/p = V/D, so cost = |V| * |V|/D = V^2/D.
+    Returns 0.0 if depth is zero or negative.
+    """
+    if depth_usd <= 0 or notional_usd == 0:
+        return 0.0
+    return notional_usd**2 / depth_usd
+
+
 def make_cost_model(venue: str) -> TransactionCostModel:
     """Create a cost model with venue-specific spread estimates."""
     fee = VENUE_FEES.get(venue, 0.0005)

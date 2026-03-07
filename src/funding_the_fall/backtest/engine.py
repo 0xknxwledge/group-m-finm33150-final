@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from funding_the_fall.backtest.costs import VENUE_FEES
+from funding_the_fall.backtest.costs import VENUE_FEES, linear_impact_cost, sqrt_impact_cost
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +84,7 @@ class PortfolioState:
     n_positions: int
     cumulative_funding: float
     cumulative_trading_costs: float
+    cumulative_impact_costs: float = 0.0
     n_liquidations: int = 0
 
 
@@ -151,6 +152,9 @@ def run_backtest(
     cascade_leverage: float = 1.5,
     cascade_budget_pct: float = 0.15,
     fee_multiplier: float = 1.0,
+    depth_per_coin: dict[str, float] | None = None,
+    impact_model: str = "sqrt",
+    depth_scale: float = 1.0,
 ) -> BacktestResult:
     """Run the full backtest with position-level margin tracking.
 
@@ -205,8 +209,19 @@ def run_backtest(
     states: list[PortfolioState] = []
     cumulative_funding = 0.0
     cumulative_costs = 0.0
+    cumulative_impact = 0.0
     total_liquidations = 0
     next_pair_id = 0
+
+    def _impact(notional: float, coin: str) -> float:
+        if depth_per_coin is None or impact_model in (None, "none"):
+            return 0.0
+        d = depth_per_coin.get(coin, 0.0) * depth_scale
+        if d <= 0:
+            return 0.0
+        if impact_model == "linear":
+            return linear_impact_cost(notional, d)
+        return sqrt_impact_cost(notional, d)
 
     for ts in epochs:
         ts = pd.Timestamp(ts)
@@ -256,8 +271,10 @@ def run_backtest(
                     price = prices.get(pos.coin, pos.entry_price)
                     equity = pos.equity(price)
                     exit_fee = VENUE_FEES.get(pos.venue, 0.0005) * pos.notional * fee_multiplier
-                    cash += equity - exit_fee
+                    impact = _impact(pos.notional, pos.coin)
+                    cash += equity - exit_fee - impact
                     cumulative_costs += exit_fee
+                    cumulative_impact += impact
                     all_trades.append(Trade(
                         timestamp=ts, coin=pos.coin, venue=pos.venue,
                         side="close_" + pos.side, notional_usd=pos.notional,
@@ -287,8 +304,9 @@ def run_backtest(
 
                 long_fee = VENUE_FEES.get(sig.long_venue, 0.0005) * leg_notional * fee_multiplier
                 short_fee = VENUE_FEES.get(sig.short_venue, 0.0005) * leg_notional * fee_multiplier
-                entry_cost = long_fee + short_fee
-                if entry_cost >= pair_margin:
+                entry_fee = long_fee + short_fee
+                entry_impact = _impact(leg_notional, sig.coin) * 2  # both legs
+                if entry_fee + entry_impact >= pair_margin:
                     continue
 
                 pid = next_pair_id
@@ -306,8 +324,9 @@ def run_backtest(
                     collateral=leg_collateral, leverage=carry_leverage,
                     strategy="carry", entry_timestamp=ts, pair_id=pid,
                 ))
-                cash -= pair_margin + entry_cost
-                cumulative_costs += entry_cost
+                cash -= pair_margin + entry_fee + entry_impact
+                cumulative_costs += entry_fee
+                cumulative_impact += entry_impact
 
                 all_trades.append(Trade(ts, sig.coin, sig.long_venue, "long",
                                         leg_notional, price, long_fee, "carry"))
@@ -326,8 +345,10 @@ def run_backtest(
                     price = prices.get(pos.coin, pos.entry_price)
                     equity = pos.equity(price)
                     exit_fee = VENUE_FEES.get(pos.venue, 0.0005) * pos.notional * fee_multiplier
-                    cash += equity - exit_fee
+                    impact = _impact(pos.notional, pos.coin)
+                    cash += equity - exit_fee - impact
                     cumulative_costs += exit_fee
+                    cumulative_impact += impact
                     all_trades.append(Trade(ts, pos.coin, pos.venue,
                                             "close_" + pos.side, pos.notional,
                                             price, exit_fee, "carry"))
@@ -348,7 +369,8 @@ def run_backtest(
                 notional = collateral * cascade_leverage
 
                 fee = VENUE_FEES.get(sig.venue, 0.0005) * notional * fee_multiplier
-                if fee >= collateral:
+                entry_impact = _impact(notional, sig.coin)
+                if fee + entry_impact >= collateral:
                     continue
 
                 positions.append(OpenPosition(
@@ -357,8 +379,9 @@ def run_backtest(
                     collateral=collateral, leverage=cascade_leverage,
                     strategy="cascade", entry_timestamp=ts,
                 ))
-                cash -= collateral + fee
+                cash -= collateral + fee + entry_impact
                 cumulative_costs += fee
+                cumulative_impact += entry_impact
                 all_trades.append(Trade(ts, sig.coin, sig.venue, "short",
                                         notional, price, fee, "cascade"))
 
@@ -373,8 +396,10 @@ def run_backtest(
                     price = prices.get(pos.coin, pos.entry_price)
                     equity = pos.equity(price)
                     exit_fee = VENUE_FEES.get(pos.venue, 0.0005) * pos.notional * fee_multiplier
-                    cash += equity - exit_fee
+                    impact = _impact(pos.notional, pos.coin)
+                    cash += equity - exit_fee - impact
                     cumulative_costs += exit_fee
+                    cumulative_impact += impact
                     all_trades.append(Trade(ts, pos.coin, pos.venue,
                                             "close_short", pos.notional,
                                             price, exit_fee, "cascade"))
@@ -392,7 +417,8 @@ def run_backtest(
             net_delta_pct=net_delta / nav if nav > 0 else 0.0,
             n_positions=len(positions),
             cumulative_funding=cumulative_funding,
-            cumulative_trading_costs=cumulative_costs,
+            cumulative_trading_costs=cumulative_costs + cumulative_impact,
+            cumulative_impact_costs=cumulative_impact,
             n_liquidations=total_liquidations,
         ))
 

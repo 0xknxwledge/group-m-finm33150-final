@@ -5,14 +5,14 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from funding_the_fall.backtest.engine import run_backtest
+from funding_the_fall.backtest.engine import BacktestResult, run_backtest
 from funding_the_fall.backtest.performance import (
     compute_performance_from_result,
     pnl_decomposition,
 )
 from funding_the_fall.models.cascade import generate_cascade_signals
 
-from .config import CARRY_LEV, CASCADE_LEV
+from .config import CARRY_LEV, CASCADE_LEV, DEPTH_SCALE
 
 
 def generate_cascade_signals_from_oi(
@@ -48,11 +48,14 @@ def run_backtests(
     initial_nav: float = 1_000_000.0,
     carry_leverage: float = CARRY_LEV,
     cascade_leverage: float = CASCADE_LEV,
+    depth_per_coin: dict[str, float] | None = None,
+    impact_model: str = "sqrt",
+    depth_scale: float = DEPTH_SCALE,
 ):
     funding_pd = funding.to_pandas()
     candles_pd = candles.to_pandas()
 
-    result = run_backtest(
+    bt_kwargs = dict(
         carry_signals=all_carry_signals,
         funding_df=funding_pd,
         candles_df=candles_pd,
@@ -62,7 +65,12 @@ def run_backtests(
         cascade_signals=cascade_signals,
         cascade_leverage=cascade_leverage,
         cascade_budget_pct=0.15,
+        depth_per_coin=depth_per_coin,
+        impact_model=impact_model,
+        depth_scale=depth_scale,
     )
+
+    result = run_backtest(**bt_kwargs)
 
     nav = result.nav_series()
     trades = result.trades_df()
@@ -74,19 +82,8 @@ def run_backtests(
         liq = trades[trades["strategy"].str.contains("liquidation")]
         print(f"Liquidations: {len(liq)}")
 
-    # Zero-cost comparison
-    result_zero = run_backtest(
-        carry_signals=all_carry_signals,
-        funding_df=funding_pd,
-        candles_df=candles_pd,
-        initial_nav=initial_nav,
-        carry_leverage=carry_leverage,
-        carry_budget_pct=0.85,
-        cascade_signals=cascade_signals,
-        cascade_leverage=cascade_leverage,
-        cascade_budget_pct=0.15,
-        fee_multiplier=0.0,
-    )
+    # Zero-cost comparison (no fees, but still has impact)
+    result_zero = run_backtest(**{**bt_kwargs, "fee_multiplier": 0.0})
 
     return result, result_zero
 
@@ -197,8 +194,9 @@ def plot_drawdown_and_rolling_sharpe(result):
         rolling_mean = returns.rolling(window).mean()
         rolling_std = returns.rolling(window).std()
         rolling_sharpe = (rolling_mean * 3 * 365 - 0.05) / (rolling_std * np.sqrt(3 * 365))
+        rolling_sharpe = rolling_sharpe.clip(-5, 5)
         ax2 = axes[1]
-        ax2.plot(rolling_sharpe.index, rolling_sharpe.values, color="steelblue", lw=1)
+        ax2.plot(rolling_sharpe.dropna().index, rolling_sharpe.dropna().values, color="steelblue", lw=1)
         ax2.axhline(0, color="gray", ls=":", lw=0.8)
         ax2.set_ylabel("Rolling Sharpe (30d)")
         ax2.set_xlabel("Date")
@@ -238,6 +236,113 @@ def print_trade_statistics(result):
         print("No trades executed.")
 
 
+def run_impact_comparison(
+    all_carry_signals,
+    cascade_signals,
+    funding: pl.DataFrame,
+    candles: pl.DataFrame,
+    initial_nav: float = 1_000_000.0,
+    carry_leverage: float = CARRY_LEV,
+    cascade_leverage: float = CASCADE_LEV,
+    depth_per_coin: dict[str, float] | None = None,
+    depth_scale: float = DEPTH_SCALE,
+) -> dict[str, BacktestResult]:
+    """Run backtest with no impact, sqrt impact, and calibrated linear impact.
+
+    The linear model is calibrated per-coin so that at each coin's median trade
+    size, linear_cost == sqrt_cost.  This is achieved by setting
+    D_linear[coin] = sqrt(V_median[coin] * D[coin]) for each coin, which
+    requires no engine changes — just a modified depth_per_coin dict.
+    """
+    funding_pd = funding.to_pandas()
+    candles_pd = candles.to_pandas()
+
+    bt_kwargs = dict(
+        carry_signals=all_carry_signals,
+        funding_df=funding_pd,
+        candles_df=candles_pd,
+        initial_nav=initial_nav,
+        carry_leverage=carry_leverage,
+        carry_budget_pct=0.85,
+        cascade_signals=cascade_signals,
+        cascade_leverage=cascade_leverage,
+        cascade_budget_pct=0.15,
+        depth_per_coin=depth_per_coin,
+        depth_scale=depth_scale,
+    )
+
+    results = {}
+    results["none"] = run_backtest(**{**bt_kwargs, "impact_model": "none"})
+    results["sqrt"] = run_backtest(**{**bt_kwargs, "impact_model": "sqrt"})
+
+    # Calibrate linear: per-coin depth so linear matches sqrt at median trade.
+    # Engine computes d_eff = D_raw * S.  Setting sqrt_cost == linear_cost at
+    # V_med gives D_lin = sqrt(V_med * D_raw / S).
+    linear_depth = dict(depth_per_coin) if depth_per_coin else {}
+    if depth_per_coin:
+        trades = results["none"].trades_df()
+        if not trades.empty:
+            for coin, d in depth_per_coin.items():
+                coin_trades = trades.loc[trades["coin"] == coin, "notional_usd"]
+                if not coin_trades.empty and d > 0:
+                    v_med = float(coin_trades.abs().median())
+                    linear_depth[coin] = (v_med * d / depth_scale) ** 0.5
+    results["linear"] = run_backtest(
+        **{**bt_kwargs, "impact_model": "linear", "depth_per_coin": linear_depth}
+    )
+    return results
+
+
+def print_impact_comparison(
+    results: dict[str, BacktestResult],
+    risk_free_rate: float = 0.05,
+):
+    """Print a comparison table across impact model variants."""
+    print(f"{'Metric':<25} {'No Impact':>14} {'Sqrt (base)':>14} {'Linear (cal.)':>14}")
+    print("-" * 70)
+
+    navs = {k: v.nav_series() for k, v in results.items()}
+    final = {k: v.iloc[-1] for k, v in navs.items()}
+    initial = navs["none"].iloc[0]
+    returns = {k: v / initial - 1 for k, v in final.items()}
+
+    for label, vals in [
+        ("Total Return", returns),
+        ("Final NAV", final),
+    ]:
+        if "Return" in label:
+            print(f"{label:<25} {vals['none']:>14.2%} {vals['sqrt']:>14.2%} {vals['linear']:>14.2%}")
+        else:
+            print(f"{label:<25} ${vals['none']:>13,.0f} ${vals['sqrt']:>13,.0f} ${vals['linear']:>13,.0f}")
+
+    impact_vals = {k: results[k].portfolio_states[-1].cumulative_impact_costs for k in results}
+    print(f"{'Impact Costs':<25} ${impact_vals['none']:>13,.0f} ${impact_vals['sqrt']:>13,.0f} ${impact_vals['linear']:>13,.0f}")
+
+    total_costs = {k: results[k].portfolio_states[-1].cumulative_trading_costs for k in results}
+    print(f"{'Total Costs':<25} ${total_costs['none']:>13,.0f} ${total_costs['sqrt']:>13,.0f} ${total_costs['linear']:>13,.0f}")
+
+
+def plot_impact_comparison(results: dict[str, BacktestResult]):
+    """Plot NAV curves for all three impact model variants."""
+    fig, ax = plt.subplots(figsize=(14, 5))
+
+    styles = {
+        "none": ("gray", "--", "No Impact"),
+        "sqrt": ("steelblue", "-", "Sqrt Impact (base case)"),
+        "linear": ("coral", "-", "Linear Impact (calibrated)"),
+    }
+    for model, (color, ls, label) in styles.items():
+        nav = results[model].nav_series()
+        ax.plot(nav.index, nav.values / 1e6, color=color, ls=ls, lw=1.5, label=label)
+
+    ax.axhline(1.0, color="gray", ls=":", lw=0.8, alpha=0.6)
+    ax.set_ylabel("NAV ($M)")
+    ax.set_title("Impact Model Sensitivity")
+    ax.legend(fontsize=10)
+    fig.tight_layout()
+    plt.show()
+
+
 def plot_pnl_decomposition(result):
     decomp = pnl_decomposition(result)
 
@@ -272,6 +377,12 @@ def plot_pnl_decomposition(result):
         )
         ax_r.set_ylabel("$K")
         ax_r.legend(fontsize=8, loc="upper right")
+
+        # Align LHS y=1.0 ($1M NAV) with RHS y=0 ($0K costs/funding)
+        lmin, lmax = ax.get_ylim()
+        frac = (1.0 - lmin) / (lmax - lmin)
+        rmin, _ = ax_r.get_ylim()
+        ax_r.set_ylim(rmin, rmin * (1 - 1 / frac))
 
         ax2 = axes[1]
         ax2.plot(decomp.index, decomp["gross_leverage"], color="coral", lw=1, label="Gross leverage")
