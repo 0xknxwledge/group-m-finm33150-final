@@ -265,6 +265,33 @@ def sensitivity_to_leverage(
     }
 
 
+def per_coin_risk_signals(
+    oi_df: pl.DataFrame,
+    leverage: float = 5.0,
+    orderbook_depth_usd: float | None = None,
+    threshold_amplification: float = 1.5,
+) -> dict[str, dict]:
+    """Compute cascade risk signal for each coin individually.
+
+    Returns dict keyed by coin → cascade_risk_signal() output.
+    Coins with no OI data are omitted.
+    """
+    coins = oi_df["coin"].unique().sort().to_list()
+    signals: dict[str, dict] = {}
+    for coin in coins:
+        coin_oi = oi_df.filter(pl.col("coin") == coin)
+        positions = build_positions_from_oi(coin_oi, leverage=leverage)
+        if not positions:
+            continue
+        signals[coin] = cascade_risk_signal(
+            positions,
+            current_price=1.0,
+            orderbook_depth_usd=orderbook_depth_usd,
+            threshold_amplification=threshold_amplification,
+        )
+    return signals
+
+
 def sensitivity_to_depth(
     positions: list[Position],
     depths_usd: list[float] | None = None,

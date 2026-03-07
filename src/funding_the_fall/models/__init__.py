@@ -6,6 +6,7 @@ from funding_the_fall.models.compare import compare_models, compare_all_tokens
 from funding_the_fall.models.cascade import (
     simulate_cascade,
     cascade_risk_signal,
+    per_coin_risk_signals,
     build_positions_from_oi,
     compute_amplification_curve,
     sensitivity_to_leverage,
@@ -21,6 +22,7 @@ __all__ = [
     "compare_all_tokens",
     "simulate_cascade",
     "cascade_risk_signal",
+    "per_coin_risk_signals",
     "build_positions_from_oi",
     "compute_amplification_curve",
     "sensitivity_to_leverage",
