@@ -16,9 +16,11 @@ optimal thresholds per (coin, venue_pair) by scanning over a parameter grid.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pandas as pd
+
+from funding_the_fall.backtest.costs import VENUE_FEES
 
 
 @dataclass
@@ -55,6 +57,29 @@ class GridSearchResult:
     sharpe: float  # annualized Sharpe of carry PnL
     avg_holding_epochs: float
     win_rate: float
+    trade_pnls: list[float] = field(default_factory=list)
+
+
+@dataclass
+class PooledCarryParams:
+    """Carry parameters shared across all venue pairs for a coin."""
+
+    coin: str
+    entry_spread: float
+    exit_spread: float
+    max_holding_epochs: int
+
+
+@dataclass
+class PooledGridResult:
+    """Result of pooled grid search for a coin."""
+
+    params: PooledCarryParams
+    total_trades: int
+    total_pnl: float
+    pooled_sharpe: float
+    avg_holding_epochs: float
+    avg_win_rate: float
 
 
 def compute_funding_spreads(funding_df: pd.DataFrame) -> pd.DataFrame:
@@ -215,6 +240,12 @@ def evaluate_carry(
                 # Each epoch the carry profit is the raw spread (not annualized)
                 per_epoch_pnl = window["spread"].sum()
 
+                # Deduct taker fees: entry + exit, both legs
+                long_fee = VENUE_FEES.get(params.long_venue, 0.0005)
+                short_fee = VENUE_FEES.get(params.short_venue, 0.0005)
+                round_trip_cost = 2 * (long_fee + short_fee)  # open + close
+                per_epoch_pnl -= round_trip_cost
+
                 trades.append(
                     {
                         "entry_ts": entry_sig.timestamp,
@@ -263,6 +294,7 @@ def evaluate_carry(
         sharpe=float(sharpe),
         avg_holding_epochs=float(avg_hold),
         win_rate=float(win_rate),
+        trade_pnls=pnl_list,
     )
 
 
@@ -274,38 +306,52 @@ def grid_search_params(
     entry_spreads: list[float] | None = None,
     exit_spreads: list[float] | None = None,
     max_holding_epochs_list: list[int] | None = None,
+    progress: bool = False,
 ) -> list[GridSearchResult]:
     """Grid search over entry/exit thresholds for a (coin, venue_pair).
 
     Default grids:
-      entry_spreads:  [0.05, 0.08, 0.10, 0.12, 0.15, 0.20] annualized
+      entry_spreads:  [0.15, 0.20, 0.25, 0.3, 0.35] annualized
       exit_spreads:   [0.01, 0.02, 0.03, 0.05] annualized
       max_holding:    [15, 30, 45, 60] epochs (5–20 days)
 
     Returns list of GridSearchResult sorted by Sharpe descending.
     """
     if entry_spreads is None:
-        entry_spreads = [0.05, 0.08, 0.10, 0.12, 0.15, 0.20]
+        entry_spreads = [0.15, 0.20, 0.25, 0.3, 0.35]
     if exit_spreads is None:
         exit_spreads = [0.01, 0.02, 0.03, 0.05]
     if max_holding_epochs_list is None:
         max_holding_epochs_list = [15, 30, 45, 60]
 
+    # Build parameter combos
+    combos = [
+        (entry, exit_, hold)
+        for entry in entry_spreads
+        for exit_ in exit_spreads
+        if exit_ < entry
+        for hold in max_holding_epochs_list
+    ]
+
+    iterator = combos
+    if progress:
+        try:
+            from tqdm.auto import tqdm
+            iterator = tqdm(combos, desc=f"{coin} {long_venue}→{short_venue}", leave=False)
+        except ImportError:
+            pass
+
     results: list[GridSearchResult] = []
-    for entry in entry_spreads:
-        for exit_ in exit_spreads:
-            if exit_ >= entry:
-                continue  # exit must be below entry
-            for hold in max_holding_epochs_list:
-                p = CarryParams(
-                    coin=coin,
-                    long_venue=long_venue,
-                    short_venue=short_venue,
-                    entry_spread=entry,
-                    exit_spread=exit_,
-                    max_holding_epochs=hold,
-                )
-                results.append(evaluate_carry(spreads_df, p))
+    for entry, exit_, hold in iterator:
+        p = CarryParams(
+            coin=coin,
+            long_venue=long_venue,
+            short_venue=short_venue,
+            entry_spread=entry,
+            exit_spread=exit_,
+            max_holding_epochs=hold,
+        )
+        results.append(evaluate_carry(spreads_df, p))
 
     results.sort(key=lambda r: r.sharpe, reverse=True)
     return results
@@ -343,3 +389,100 @@ def select_best_params(
         if valid:
             best[key] = valid[0].params  # already sorted by Sharpe desc
     return best
+
+
+def grid_search_per_coin(
+    spreads_df: pd.DataFrame,
+    coin: str,
+    entry_spreads: list[float] | None = None,
+    exit_spreads: list[float] | None = None,
+    max_holding_epochs_list: list[int] | None = None,
+    min_trades: int = 3,
+    progress: bool = False,
+) -> list[PooledGridResult]:
+    """Grid search pooled across all venue pairs for a single coin.
+
+    Instead of fitting separate parameters per (coin, venue-pair), evaluates
+    each candidate (entry, exit, max_hold) across ALL pairs for the coin
+    simultaneously and computes a pooled Sharpe from the combined trade PnL
+    distribution. This prevents overfitting to pair-specific noise.
+
+    Returns list of PooledGridResult sorted by pooled Sharpe descending.
+    """
+    import numpy as np
+
+    if entry_spreads is None:
+        entry_spreads = [0.15, 0.20, 0.25, 0.3, 0.35]
+    if exit_spreads is None:
+        exit_spreads = [0.01, 0.02, 0.03, 0.05]
+    if max_holding_epochs_list is None:
+        max_holding_epochs_list = [15, 30, 45, 60]
+
+    pairs = (
+        spreads_df[spreads_df["coin"] == coin][["long_venue", "short_venue"]]
+        .drop_duplicates()
+        .values.tolist()
+    )
+    if not pairs:
+        return []
+
+    combos = [
+        (entry, exit_, hold)
+        for entry in entry_spreads
+        for exit_ in exit_spreads
+        if exit_ < entry
+        for hold in max_holding_epochs_list
+    ]
+
+    iterator = combos
+    if progress:
+        try:
+            from tqdm.auto import tqdm
+            iterator = tqdm(combos, desc=f"{coin}", leave=False)
+        except ImportError:
+            pass
+
+    results: list[PooledGridResult] = []
+    for entry, exit_, hold in iterator:
+        all_pnls: list[float] = []
+        all_holds: list[float] = []
+
+        for lv, sv in pairs:
+            p = CarryParams(
+                coin=coin, long_venue=lv, short_venue=sv,
+                entry_spread=entry, exit_spread=exit_,
+                max_holding_epochs=hold,
+            )
+            r = evaluate_carry(spreads_df, p)
+            if r.n_trades > 0:
+                all_pnls.extend(r.trade_pnls)
+                all_holds.extend([r.avg_holding_epochs] * r.n_trades)
+
+        n = len(all_pnls)
+        if n < min_trades:
+            continue
+
+        pnl_arr = np.array(all_pnls)
+        avg_hold = float(np.mean(all_holds))
+
+        if pnl_arr.std() > 0 and n > 1:
+            per_trade_sharpe = pnl_arr.mean() / pnl_arr.std()
+            trades_per_year = 1095.0 / avg_hold if avg_hold > 0 else 0.0
+            sharpe = float(per_trade_sharpe * np.sqrt(trades_per_year))
+        else:
+            sharpe = 0.0
+
+        results.append(PooledGridResult(
+            params=PooledCarryParams(
+                coin=coin, entry_spread=entry,
+                exit_spread=exit_, max_holding_epochs=hold,
+            ),
+            total_trades=n,
+            total_pnl=float(pnl_arr.sum()),
+            pooled_sharpe=sharpe,
+            avg_holding_epochs=avg_hold,
+            avg_win_rate=float(np.mean(pnl_arr > 0)),
+        ))
+
+    results.sort(key=lambda r: r.pooled_sharpe, reverse=True)
+    return results

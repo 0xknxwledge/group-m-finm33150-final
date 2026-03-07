@@ -35,6 +35,8 @@ class PositionTarget:
     venue: str
     side: str  # "long" or "short"
     notional_usd: float  # target notional exposure
+    collateral_usd: float  # margin posted (notional / leverage)
+    leverage: float  # notional / collateral
     strategy: str  # "carry" or "cascade"
 
 
@@ -52,7 +54,9 @@ def allocate_positions(
     nav: float,
     per_coin_signals: dict[str, dict] | None = None,
     deepest_venue: str = "binance",
-    max_leverage: float = 5.0,
+    carry_leverage: float = 4.0,
+    cascade_leverage: float = 1.5,
+    max_gross_leverage: float = 5.0,
     max_single_exchange_pct: float = 0.40,
     max_net_delta_pct: float = 0.10,
 ) -> list[PositionTarget]:
@@ -71,43 +75,48 @@ def allocate_positions(
         weighted by per-coin amplification. Otherwise uniform across coins.
     deepest_venue : str
         Venue used for cascade shorts (deepest orderbook).
-    max_leverage : float
-        Max gross leverage as multiple of NAV.
+    carry_leverage : float
+        Leverage for each carry leg (delta-neutral → higher leverage OK).
+    cascade_leverage : float
+        Leverage for cascade shorts (directional → conservative).
+    max_gross_leverage : float
+        Max total notional as multiple of NAV.
     max_single_exchange_pct : float
         Max exposure to any single exchange as fraction of NAV.
     max_net_delta_pct : float
         Max net delta across all positions as fraction of NAV.
 
-    Risk controls
-    -------------
-    - Total gross leverage <= max_leverage * NAV
-    - Exposure to any single exchange <= max_single_exchange_pct * NAV
-    - Net delta across all positions <= max_net_delta_pct * NAV
+    Margin model
+    ------------
+    Budgets are denominated in margin (collateral), not notional.
+    Notional = collateral × leverage. Total collateral across all
+    positions must stay ≤ NAV (can't post more margin than we have).
     """
     risk_score = cascade_signal.get("risk_score", 0.0)
     targets: list[PositionTarget] = []
 
-    # --- Carry leg: scale down with risk ----------------------------------
+    # --- Carry leg: margin-based, scale down with risk --------------------
     carry_scale = 1.0 - CARRY_RISK_DAMPING * risk_score
-    carry_budget = CARRY_BASE_WEIGHT * nav * carry_scale
+    carry_margin_budget = CARRY_BASE_WEIGHT * nav * carry_scale
 
-    # Convert carry signals into position targets.
-    # Each carry signal is a delta-neutral pair (long + short on two venues),
-    # so it contributes gross leverage but ~zero net delta.
+    # Each carry trade is a delta-neutral pair (long + short).
+    # Margin is split evenly between the two legs.
     if carry_signals:
-        # Distribute carry budget proportionally to spread attractiveness
-        total_spread = sum(abs(s.spread) for s in carry_signals) or 1.0
-        for sig in carry_signals:
-            if sig.action != "enter":
-                continue
+        entries = [s for s in carry_signals if s.action == "enter"]
+        total_spread = sum(abs(s.spread) for s in entries) or 1.0
+        for sig in entries:
             weight = abs(sig.spread) / total_spread
-            leg_notional = carry_budget * weight
+            pair_margin = carry_margin_budget * weight
+            leg_collateral = pair_margin / 2
+            leg_notional = leg_collateral * carry_leverage
             targets.append(PositionTarget(
                 timestamp=sig.timestamp,
                 coin=sig.coin,
                 venue=sig.long_venue,
                 side="long",
                 notional_usd=leg_notional,
+                collateral_usd=leg_collateral,
+                leverage=carry_leverage,
                 strategy="carry",
             ))
             targets.append(PositionTarget(
@@ -116,43 +125,56 @@ def allocate_positions(
                 venue=sig.short_venue,
                 side="short",
                 notional_usd=leg_notional,
+                collateral_usd=leg_collateral,
+                leverage=carry_leverage,
                 strategy="carry",
             ))
 
-    # --- Cascade leg: opportunistic short, scaled by risk_score -----------
-    cascade_budget = CASCADE_MAX_WEIGHT * nav * risk_score
+    # --- Cascade leg: directional short, conservative leverage ------------
+    cascade_margin_budget = CASCADE_MAX_WEIGHT * nav * risk_score
 
-    if cascade_budget > 0 and per_coin_signals:
-        # Weight by per-coin A(5%); coins with higher amplification get more
+    if cascade_margin_budget > 0 and per_coin_signals:
         amps = {
             coin: sig.get("amplification_at_5pct", 1.0)
             for coin, sig in per_coin_signals.items()
         }
-        # Only short coins with amplification > 1 (actual cascade risk)
         amps = {c: a for c, a in amps.items() if a > 1.0}
         total_amp = sum(amps.values()) or 1.0
         for coin, amp in amps.items():
             weight = amp / total_amp
+            coin_collateral = cascade_margin_budget * weight
+            coin_notional = coin_collateral * cascade_leverage
             targets.append(PositionTarget(
                 timestamp=carry_signals[0].timestamp if carry_signals else pd.Timestamp.now(),
                 coin=coin,
                 venue=deepest_venue,
                 side="short",
-                notional_usd=cascade_budget * weight,
+                notional_usd=coin_notional,
+                collateral_usd=coin_collateral,
+                leverage=cascade_leverage,
                 strategy="cascade",
             ))
 
     # --- Risk limit enforcement -------------------------------------------
     targets = _enforce_risk_limits(
-        targets, nav, max_leverage, max_single_exchange_pct, max_net_delta_pct
+        targets, nav, max_gross_leverage, max_single_exchange_pct, max_net_delta_pct
     )
     return targets
+
+
+def _scale_target(t: PositionTarget, scale: float) -> PositionTarget:
+    """Scale a target's notional and collateral by the same factor."""
+    return PositionTarget(
+        t.timestamp, t.coin, t.venue, t.side,
+        t.notional_usd * scale, t.collateral_usd * scale,
+        t.leverage, t.strategy,
+    )
 
 
 def _enforce_risk_limits(
     targets: list[PositionTarget],
     nav: float,
-    max_leverage: float,
+    max_gross_leverage: float,
     max_single_exchange_pct: float,
     max_net_delta_pct: float,
 ) -> list[PositionTarget]:
@@ -160,16 +182,18 @@ def _enforce_risk_limits(
     if not targets or nav <= 0:
         return targets
 
+    # 0. Total collateral cap (can't post more margin than NAV)
+    total_collateral = sum(t.collateral_usd for t in targets)
+    if total_collateral > nav:
+        scale = nav / total_collateral
+        targets = [_scale_target(t, scale) for t in targets]
+
     # 1. Gross leverage cap
     gross = sum(t.notional_usd for t in targets)
-    max_gross = max_leverage * nav
+    max_gross = max_gross_leverage * nav
     if gross > max_gross:
         scale = max_gross / gross
-        targets = [
-            PositionTarget(t.timestamp, t.coin, t.venue, t.side,
-                           t.notional_usd * scale, t.strategy)
-            for t in targets
-        ]
+        targets = [_scale_target(t, scale) for t in targets]
 
     # 2. Single-exchange concentration cap
     max_venue = max_single_exchange_pct * nav
@@ -181,11 +205,7 @@ def _enforce_risk_limits(
     )
     if worst_venue_ratio > 1.0:
         scale = 1.0 / worst_venue_ratio
-        targets = [
-            PositionTarget(t.timestamp, t.coin, t.venue, t.side,
-                           t.notional_usd * scale, t.strategy)
-            for t in targets
-        ]
+        targets = [_scale_target(t, scale) for t in targets]
 
     # 3. Net delta cap
     net_delta = sum(
@@ -193,19 +213,15 @@ def _enforce_risk_limits(
     )
     max_delta = max_net_delta_pct * nav
     if abs(net_delta) > max_delta and abs(net_delta) > 0:
-        # Scale only the leg that's causing the imbalance
         excess = abs(net_delta) - max_delta
         dominant_side = "long" if net_delta > 0 else "short"
         side_total = sum(
             t.notional_usd for t in targets if t.side == dominant_side
         )
         if side_total > 0:
-            scale = (side_total - excess) / side_total
-            scale = max(scale, 0.0)
+            scale = max((side_total - excess) / side_total, 0.0)
             targets = [
-                PositionTarget(t.timestamp, t.coin, t.venue, t.side,
-                               t.notional_usd * scale if t.side == dominant_side
-                               else t.notional_usd, t.strategy)
+                _scale_target(t, scale) if t.side == dominant_side else t
                 for t in targets
             ]
 
