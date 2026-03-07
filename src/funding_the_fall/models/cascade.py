@@ -77,9 +77,9 @@ def _venue_tiers(venue: str, coin: str) -> list[tuple[float, float]]:
 class Position:
     """A leveraged position that can be liquidated."""
 
-    collateral_usd: float
-    debt_usd: float
-    liquidation_threshold: float  # collateral/debt ratio triggering liquidation
+    collateral_usd: float  # margin posted
+    debt_usd: float  # notional minus margin
+    liquidation_threshold: float  # maintenance margin rate (fraction of notional)
     layer: str  # "perp", "hyperlend", or "morpho"
 
 
@@ -91,24 +91,25 @@ class CascadeResult:
     effective_shock: float
     amplification: float  # effective / initial
     rounds: int
-    total_debt_liquidated: float
+    total_notional_liquidated: float
     liquidations_by_layer: dict[str, float] = field(default_factory=dict)
 
 
 def _is_liquidated(pos: Position, price_drop_pct: float) -> bool:
-    """Check whether a position is liquidated after a given price drop.
+    """Check whether a perp position is liquidated after a given price drop.
 
-    After a drop of `price_drop_pct` (as a fraction, e.g. 0.10 for 10%),
-    collateral value shrinks proportionally. Liquidation triggers when
-    the health factor falls below 1:
+    For a long perp: margin = collateral, notional = collateral + debt.
+    After a drop δ, remaining equity = margin - notional * δ.
+    Liquidation triggers when equity falls below maintenance margin:
 
-        HF = (collateral * (1 - drop) * liq_threshold) / debt < 1
+        margin - notional * δ < maintenance_rate * notional
     """
-    shocked_collateral = pos.collateral_usd * (1.0 - price_drop_pct)
-    if pos.debt_usd <= 0:
+    notional = pos.collateral_usd + pos.debt_usd
+    if notional <= 0:
         return False
-    health_factor = (shocked_collateral * pos.liquidation_threshold) / pos.debt_usd
-    return health_factor < 1.0
+    remaining_equity = pos.collateral_usd - notional * price_drop_pct
+    maintenance_margin = pos.liquidation_threshold * notional
+    return remaining_equity < maintenance_margin
 
 
 def _price_impact(volume_usd: float, depth_usd: float) -> float:
@@ -157,9 +158,10 @@ def simulate_cascade(
         rounds_used = round_num
         forced_volume = 0.0
         for pos in newly_liquidated:
-            total_liquidated += pos.debt_usd
-            by_layer[pos.layer] = by_layer.get(pos.layer, 0.0) + pos.debt_usd
-            forced_volume += pos.collateral_usd * (1.0 - cumulative_drop)
+            notional = pos.collateral_usd + pos.debt_usd
+            total_liquidated += notional
+            by_layer[pos.layer] = by_layer.get(pos.layer, 0.0) + notional
+            forced_volume += notional * (1.0 - cumulative_drop)
 
         additional_drop = _price_impact(forced_volume, depth)
         cumulative_drop = cumulative_drop + (1.0 - cumulative_drop) * additional_drop
@@ -175,7 +177,7 @@ def simulate_cascade(
         effective_shock=cumulative_drop,
         amplification=amplification,
         rounds=rounds_used,
-        total_debt_liquidated=total_liquidated,
+        total_notional_liquidated=total_liquidated,
         liquidations_by_layer=by_layer,
     )
 
@@ -255,7 +257,7 @@ def cascade_risk_signal(
 def build_positions_from_oi(
     oi_df: pl.DataFrame,
     leverage: float = 5.0,
-    liq_threshold: float = 1.0,
+    liq_threshold: float = 0.005,
     layer: str = "perp",
 ) -> list[Position]:
     """Build Position list from an open-interest DataFrame.
@@ -286,7 +288,7 @@ def build_positions_from_oi(
 def build_positions_tiered(
     oi_df: pl.DataFrame,
     tiers: list[tuple[float, float]] | None = None,
-    liq_threshold: float = 1.0,
+    liq_threshold: float = 0.005,
     layer: str = "perp",
 ) -> list[Position]:
     """Build positions with heterogeneous leverage tiers per (venue, coin).
@@ -368,12 +370,16 @@ def per_coin_risk_signals(
     orderbook_depth_usd: float | None = None,
     depth_per_coin: dict[str, float] | None = None,
     threshold_amplification: float = 1.5,
+    tiered: bool = True,
 ) -> dict[str, dict]:
     """Compute cascade risk signal for each coin individually.
 
     If depth_per_coin is provided (from fetch_orderbook_depth_all),
     each coin uses its measured depth. Otherwise falls back to
     orderbook_depth_usd or the module default.
+
+    If tiered=True (default), uses per-venue leverage tiers from MAX_LEVERAGE
+    for realistic position modeling.
 
     Returns dict keyed by coin → cascade_risk_signal() output.
     """
@@ -382,7 +388,10 @@ def per_coin_risk_signals(
     signals: dict[str, dict] = {}
     for coin in coins:
         coin_oi = oi_df.filter(pl.col("coin") == coin)
-        positions = build_positions_from_oi(coin_oi, leverage=leverage)
+        if tiered:
+            positions = build_positions_tiered(coin_oi)
+        else:
+            positions = build_positions_from_oi(coin_oi, leverage=leverage)
         if not positions:
             continue
         coin_depth = depth_per_coin.get(coin, orderbook_depth_usd)
@@ -485,7 +494,7 @@ def validate_cascade(
                 positions, current_price=1.0,
                 initial_shock_pct=dd_pct, orderbook_depth_usd=depth,
             )
-            predicted = result.total_debt_liquidated
+            predicted = result.total_notional_liquidated
 
             # Realized liquidation volume in the window around the event
             window_start = ts

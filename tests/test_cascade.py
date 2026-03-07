@@ -24,42 +24,46 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
 # ---------------------------------------------------------------------------
-# _is_liquidated
+# _is_liquidated  (perp margin model)
 # ---------------------------------------------------------------------------
 
 
 class TestIsLiquidated:
     def test_safe_position(self):
+        # 5x leverage: margin=200, notional=1000, liq at ~19.5%
         pos = Position(
-            collateral_usd=200, debt_usd=100, liquidation_threshold=1.25, layer="perp"
+            collateral_usd=200, debt_usd=800, liquidation_threshold=0.005, layer="perp"
         )
         assert _is_liquidated(pos, 0.05) is False
 
     def test_underwater_position(self):
+        # 4x leverage: margin=250, notional=1000, liq at ~24.5%
         pos = Position(
-            collateral_usd=120, debt_usd=100, liquidation_threshold=1.0, layer="perp"
+            collateral_usd=250, debt_usd=750, liquidation_threshold=0.005, layer="perp"
         )
         assert _is_liquidated(pos, 0.25) is True
 
     def test_exact_threshold_not_liquidated(self):
-        # HF = (100 * (1 - 0) * 1.0) / 100 = 1.0 → not liquidated (check is < 1)
+        # 2x leverage: margin=500, notional=1000, liq at 49.5%
+        # At 0% drop: equity=500, maint=5 → not liquidated
         pos = Position(
-            collateral_usd=100, debt_usd=100, liquidation_threshold=1.0, layer="perp"
+            collateral_usd=500, debt_usd=500, liquidation_threshold=0.005, layer="perp"
         )
         assert _is_liquidated(pos, 0.0) is False
 
     def test_zero_debt_never_liquidated(self):
+        # Fully collateralized (1x): margin=1000, notional=1000
         pos = Position(
             collateral_usd=1000,
             debt_usd=0,
-            liquidation_threshold=1.25,
+            liquidation_threshold=0.005,
             layer="hyperlend",
         )
         assert _is_liquidated(pos, 0.99) is False
 
     def test_full_shock_liquidates(self):
         pos = Position(
-            collateral_usd=200, debt_usd=100, liquidation_threshold=1.25, layer="morpho"
+            collateral_usd=200, debt_usd=800, liquidation_threshold=0.005, layer="morpho"
         )
         assert _is_liquidated(pos, 1.0) is True
 
@@ -92,44 +96,45 @@ class TestPriceImpact:
 class TestSimulateCascade:
     @staticmethod
     def _safe_positions() -> list[Position]:
+        """Low leverage positions that survive small shocks."""
         return [
             Position(
-                collateral_usd=10_000,
-                debt_usd=1_000,
-                liquidation_threshold=1.25,
+                collateral_usd=200,  # 5x leverage
+                debt_usd=800,
+                liquidation_threshold=0.005,
                 layer="perp",
             ),
             Position(
-                collateral_usd=10_000,
-                debt_usd=1_000,
-                liquidation_threshold=1.25,
+                collateral_usd=333,  # 3x leverage
+                debt_usd=667,
+                liquidation_threshold=0.005,
                 layer="hyperlend",
             ),
         ]
 
     @staticmethod
     def _fragile_positions() -> list[Position]:
-        """Highly leveraged positions that cascade easily."""
+        """Tiered leverage positions that cascade at moderate shocks."""
         return [
-            # HF after 5% drop: 1020*0.95/1000 = 0.969 → liquidated round 1
+            # 50x: liq at ~1.5% → liquidated by 5% shock in round 1
             Position(
-                collateral_usd=1020,
-                debt_usd=1000,
-                liquidation_threshold=1.0,
+                collateral_usd=20,
+                debt_usd=980,
+                liquidation_threshold=0.005,
                 layer="perp",
             ),
-            # Survives 5% but not the additional price impact from round 1
+            # 20x: liq at ~4.5% → liquidated by 5% shock in round 1
             Position(
-                collateral_usd=1100,
-                debt_usd=1000,
-                liquidation_threshold=1.0,
+                collateral_usd=50,
+                debt_usd=950,
+                liquidation_threshold=0.005,
                 layer="hyperlend",
             ),
-            # Even more cushion — needs round 2 impact
+            # 10x: liq at ~9.5% → survives 5% but hit by cascade impact
             Position(
-                collateral_usd=1200,
-                debt_usd=1000,
-                liquidation_threshold=1.0,
+                collateral_usd=100,
+                debt_usd=900,
+                liquidation_threshold=0.005,
                 layer="morpho",
             ),
         ]
@@ -138,21 +143,21 @@ class TestSimulateCascade:
         result = simulate_cascade(self._safe_positions(), 100.0, 0.01)
         assert result.amplification == pytest.approx(1.0)
         assert result.rounds == 0
-        assert result.total_debt_liquidated == 0.0
+        assert result.total_notional_liquidated == 0.0
 
     def test_single_round(self):
+        # 10x leverage: liq at ~9.5%, 10% shock liquidates
         positions = [
             Position(
-                collateral_usd=1050,
-                debt_usd=1000,
-                liquidation_threshold=1.0,
+                collateral_usd=100,
+                debt_usd=900,
+                liquidation_threshold=0.005,
                 layer="perp",
             ),
         ]
-        # 10% shock liquidates this position; only one round needed
         result = simulate_cascade(positions, 100.0, 0.10, orderbook_depth_usd=1e12)
         assert result.rounds == 1
-        assert result.total_debt_liquidated == pytest.approx(1000.0)
+        assert result.total_notional_liquidated == pytest.approx(1000.0)
 
     def test_multi_round_cascade(self):
         result = simulate_cascade(
@@ -173,20 +178,20 @@ class TestSimulateCascade:
         )
         assert isinstance(result.liquidations_by_layer, dict)
         total_from_layers = sum(result.liquidations_by_layer.values())
-        assert total_from_layers == pytest.approx(result.total_debt_liquidated)
+        assert total_from_layers == pytest.approx(result.total_notional_liquidated)
 
     def test_empty_positions(self):
         result = simulate_cascade([], 100.0, 0.10)
         assert result.rounds == 0
-        assert result.total_debt_liquidated == 0.0
+        assert result.total_notional_liquidated == 0.0
 
     def test_max_rounds_cap(self):
-        # Positions that always re-trigger — cap prevents infinite loop
+        # 200x leverage: liq at ~0% → any positive shock liquidates
         huge = [
             Position(
-                collateral_usd=1e9,
-                debt_usd=1e9,
-                liquidation_threshold=1.0,
+                collateral_usd=5e6,
+                debt_usd=995e6,
+                liquidation_threshold=0.005,
                 layer="perp",
             )
             for _ in range(200)
@@ -205,11 +210,12 @@ class TestSimulateCascade:
 class TestAmplificationCurve:
     @staticmethod
     def _positions() -> list[Position]:
+        # 10x leverage: liq at ~9.5%
         return [
             Position(
-                collateral_usd=1100,
-                debt_usd=1000,
-                liquidation_threshold=1.0,
+                collateral_usd=100,
+                debt_usd=900,
+                liquidation_threshold=0.005,
                 layer="perp",
             ),
         ]
@@ -237,11 +243,12 @@ class TestAmplificationCurve:
 
 class TestCascadeRiskSignal:
     def test_low_risk(self):
+        # ~1x leverage: liq at 99%+ → extremely safe
         safe = [
             Position(
                 collateral_usd=10_000,
                 debt_usd=100,
-                liquidation_threshold=1.25,
+                liquidation_threshold=0.005,
                 layer="perp",
             ),
         ]
@@ -251,11 +258,12 @@ class TestCascadeRiskSignal:
         assert sig["critical_shock"] is None
 
     def test_high_risk(self):
+        # 50x leverage: liq at ~1.5% → very fragile
         fragile = [
             Position(
-                collateral_usd=1050,
-                debt_usd=1000,
-                liquidation_threshold=1.0,
+                collateral_usd=20,
+                debt_usd=980,
+                liquidation_threshold=0.005,
                 layer="perp",
             )
             for _ in range(50)
@@ -324,12 +332,12 @@ class TestBuildPositionsFromOI:
             oi_values=[100_000.0],
         )
         positions = build_positions_from_oi(
-            df, leverage=10.0, liq_threshold=1.25, layer="morpho"
+            df, leverage=10.0, liq_threshold=0.01, layer="morpho"
         )
         assert len(positions) == 1
         assert positions[0].collateral_usd == pytest.approx(10_000.0)
         assert positions[0].debt_usd == pytest.approx(90_000.0)
-        assert positions[0].liquidation_threshold == 1.25
+        assert positions[0].liquidation_threshold == 0.01
         assert positions[0].layer == "morpho"
 
     def test_zero_oi_skipped(self):
@@ -483,11 +491,12 @@ class TestCascadeInterfaces:
 
     def test_risk_signal_dict_compatible_with_allocation(self):
         """cascade_risk_signal() output has keys/types allocation.allocate_positions expects."""
+        # 50x leverage positions: fragile enough to trigger cascade signal
         positions = [
             Position(
-                collateral_usd=1050,
-                debt_usd=1000,
-                liquidation_threshold=1.0,
+                collateral_usd=20,
+                debt_usd=980,
+                liquidation_threshold=0.005,
                 layer="perp",
             )
             for _ in range(20)
@@ -559,7 +568,7 @@ class TestSensitivityToLeverage:
             assert all(isinstance(r, CascadeResult) for r in curves)
             assert len(curves) == 2
 
-    def test_higher_leverage_more_debt_liquidated(self):
+    def test_higher_leverage_more_notional_liquidated(self):
         shocks = np.array([0.10])
         result = sensitivity_to_leverage(
             self._make_oi_df(),
@@ -567,9 +576,9 @@ class TestSensitivityToLeverage:
             shocks=shocks,
             orderbook_depth_usd=1e9,
         )
-        debt_low = result[3.0][0].total_debt_liquidated
-        debt_high = result[20.0][0].total_debt_liquidated
-        assert debt_high >= debt_low
+        liq_low = result[3.0][0].total_notional_liquidated
+        liq_high = result[20.0][0].total_notional_liquidated
+        assert liq_high >= liq_low
 
 
 # ---------------------------------------------------------------------------
@@ -580,11 +589,12 @@ class TestSensitivityToLeverage:
 class TestSensitivityToDepth:
     @staticmethod
     def _positions() -> list[Position]:
+        # 10x leverage: liq at ~9.5%
         return [
             Position(
-                collateral_usd=1100,
-                debt_usd=1000,
-                liquidation_threshold=1.0,
+                collateral_usd=100,
+                debt_usd=900,
+                liquidation_threshold=0.005,
                 layer="perp",
             )
             for _ in range(20)
