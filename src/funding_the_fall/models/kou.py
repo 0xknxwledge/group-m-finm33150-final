@@ -187,9 +187,7 @@ def heuristic_calibration(
         # η = 1/mean gives the MLE of the exponential rate parameter
         eta1 = max(1.0 / np.mean(pos_jumps), 1.5) if len(pos_jumps) > 0 else 10.0
         eta2 = (
-            max(1.0 / np.mean(np.abs(neg_jumps)), 0.5)
-            if len(neg_jumps) > 0
-            else 10.0
+            max(1.0 / np.mean(np.abs(neg_jumps)), 0.5) if len(neg_jumps) > 0 else 10.0
         )
     elif n_jumps == 1:
         jump_ret = float(returns[jump_mask][0])
@@ -261,12 +259,12 @@ def mle_calibration(
         heuristic_params.mu,
     ]
     bounds = [
-        (1e-8, None),   # sigma > 0
-        (1e-8, None),   # lam > 0
-        (0.01, 0.99),   # 0 < p < 1
+        (1e-8, None),  # sigma > 0
+        (1e-8, None),  # lam > 0
+        (0.01, 0.99),  # 0 < p < 1
         (1.01, 100.0),  # eta1 > 1 (finite mean requirement)
-        (0.1, 100.0),   # eta2 > 0
-        (None, None),   # mu
+        (0.1, 100.0),  # eta2 > 0
+        (None, None),  # mu
     ]
 
     result = minimize(

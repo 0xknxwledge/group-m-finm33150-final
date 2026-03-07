@@ -118,9 +118,7 @@ def merton_log_density(
 
     stacked = np.array(components)
     max_log = np.max(stacked, axis=0)
-    return max_log + np.log(
-        np.sum(np.exp(stacked - max_log[np.newaxis, :]), axis=0)
-    )
+    return max_log + np.log(np.sum(np.exp(stacked - max_log[np.newaxis, :]), axis=0))
 
 
 def _neg_log_likelihood(theta, returns, dt):

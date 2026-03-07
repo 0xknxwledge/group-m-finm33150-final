@@ -168,7 +168,13 @@ class TestImplementationShortfall:
 class TestVenueFees:
     def test_expected_keys(self):
         assert set(VENUE_FEES.keys()) == {
-            "hyperliquid", "lighter", "binance", "bybit", "okx", "kraken", "dydx",
+            "hyperliquid",
+            "lighter",
+            "binance",
+            "bybit",
+            "okx",
+            "kraken",
+            "dydx",
         }
 
     def test_values_non_negative(self):

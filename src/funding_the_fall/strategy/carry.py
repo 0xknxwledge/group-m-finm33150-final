@@ -121,7 +121,9 @@ def compute_funding_spreads(funding_df: pd.DataFrame) -> pd.DataFrame:
                         "long_venue": long_v,
                         "short_venue": short_v,
                         "spread": spread,
-                        "spread_annualized": spread * FUNDING_PERIODS_PER_DAY * DAYS_PER_YEAR,
+                        "spread_annualized": spread
+                        * FUNDING_PERIODS_PER_DAY
+                        * DAYS_PER_YEAR,
                     }
                 )
 
@@ -173,7 +175,10 @@ def simulate_carry(
             #   1. Spread mean-reverts below exit threshold
             #   2. Holding period exceeds max epochs
             epochs_held = idx - entry_epoch_idx
-            if ann_spread <= params.exit_spread or epochs_held >= params.max_holding_epochs:
+            if (
+                ann_spread <= params.exit_spread
+                or epochs_held >= params.max_holding_epochs
+            ):
                 signals.append(
                     CarrySignal(
                         timestamp=pd.Timestamp(ts),
