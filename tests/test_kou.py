@@ -106,7 +106,7 @@ class TestKouLogDensity:
         x = np.linspace(-0.3, 0.3, 10_000)
         p = KouParams(sigma=0.01, lam=0.1, p=0.4, eta1=10.0, eta2=5.0, mu=0.0)
         density = np.exp(kou_log_density(x, p))
-        integral = np.trapz(density, x)
+        integral = np.trapezoid(density, x)
         assert integral == pytest.approx(1.0, abs=0.1)
 
     def test_finite_values(self):

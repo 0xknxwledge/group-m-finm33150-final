@@ -1,4 +1,4 @@
-.PHONY: sync test lab lint format clean
+.PHONY: sync test lab lint format clean pitchbook pitchbook-watch
 
 sync:
 	uv sync
@@ -14,6 +14,12 @@ lint:
 
 format:
 	uv run ruff format src/ tests/
+
+pitchbook:
+	typst compile pitchbook/main.typ pitchbook/pitchbook.pdf
+
+pitchbook-watch:
+	typst watch pitchbook/main.typ pitchbook/pitchbook.pdf
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +

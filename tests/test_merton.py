@@ -95,7 +95,7 @@ class TestMertonLogDensity:
         x = np.linspace(-0.5, 0.5, 10_000)
         p = MertonParams(sigma=0.01, lam=0.1, mu_j=-0.05, sigma_j=0.02, mu=0.0)
         density = np.exp(merton_log_density(x, p))
-        integral = np.trapz(density, x)
+        integral = np.trapezoid(density, x)
         assert integral == pytest.approx(1.0, abs=0.05)
 
     def test_peak_near_drift(self):
