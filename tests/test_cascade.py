@@ -244,6 +244,8 @@ class TestAmplificationCurve:
 class TestCascadeRiskSignal:
     def test_low_risk(self):
         # ~1x leverage: liq at 99%+ → extremely safe
+        # Risk score is OI/depth-based: tiny notional ($10.1K) vs default depth ($5M)
+        # → OI/depth ≈ 0.002 → risk_score ≈ 0.00001
         safe = [
             Position(
                 collateral_usd=10_000,
@@ -253,12 +255,13 @@ class TestCascadeRiskSignal:
             ),
         ]
         sig = cascade_risk_signal(safe, 100.0)
-        assert sig["risk_score"] == pytest.approx(0.0)
+        assert sig["risk_score"] < 0.01  # near zero
         assert not sig["signal"]
         assert sig["critical_shock"] is None
 
     def test_high_risk(self):
-        # 50x leverage: liq at ~1.5% → very fragile
+        # 50x leverage, high OI relative to depth → fragile
+        # OI = 50 * $1K = $50K, depth = $100 → OI/depth = 500 → risk ≈ 0.92
         fragile = [
             Position(
                 collateral_usd=20,
@@ -268,7 +271,7 @@ class TestCascadeRiskSignal:
             )
             for _ in range(50)
         ]
-        sig = cascade_risk_signal(fragile, 100.0, orderbook_depth_usd=100_000)
+        sig = cascade_risk_signal(fragile, 100.0, orderbook_depth_usd=100)
         assert sig["risk_score"] > 0.5
         assert sig["signal"]
         assert isinstance(sig["critical_shock"], (float, np.floating))
@@ -280,6 +283,7 @@ class TestCascadeRiskSignal:
             "critical_shock",
             "amplification_at_5pct",
             "signal",
+            "oi_depth_ratio",
         }
 
 

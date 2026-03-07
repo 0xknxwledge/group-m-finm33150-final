@@ -65,12 +65,15 @@ MAX_LEVERAGE: dict[tuple[str, str], int] = {
 def _venue_tiers(venue: str, coin: str) -> list[tuple[float, float]]:
     """Generate leverage tiers for a (venue, coin) pair.
 
-    Tiers: 50% at low leverage (3x), 30% at moderate, 20% at max.
-    The moderate tier is half the venue's max leverage (floored at 5x).
+    Tiers: 75% at low leverage (3x), 20% at moderate, 5% at high.
+    The moderate tier is max/3 (floored at 5x). The high tier is capped
+    at 20x — the vast majority of perp volume is below 20x leverage even
+    on venues that offer higher.
     """
     max_lev = MAX_LEVERAGE.get((venue, coin), 10)
-    mid_lev = max(5.0, max_lev / 2)
-    return [(3.0, 0.50), (mid_lev, 0.30), (float(max_lev), 0.20)]
+    mid_lev = max(5.0, max_lev / 3)
+    high_lev = min(20.0, float(max_lev))
+    return [(3.0, 0.75), (mid_lev, 0.20), (high_lev, 0.05)]
 
 
 @dataclass
@@ -201,6 +204,11 @@ def compute_amplification_curve(
     ]
 
 
+# Reference OI-to-depth ratio for risk score mapping.
+# Calibrated so OI/depth=200 → risk_score≈0.63 (median crypto market).
+RISK_REFERENCE_RATIO = 200.0
+
+
 def cascade_risk_signal(
     positions: list[Position],
     current_price: float,
@@ -209,18 +217,29 @@ def cascade_risk_signal(
 ) -> dict:
     """Compute the current cascade risk level.
 
+    The risk_score is based on the OI-to-depth ratio rather than the cascade
+    critical shock. Cascade amplification in crypto is binary (below critical
+    shock: A=1, above: catastrophic) due to extreme OI/depth ratios. The
+    critical shock is a structural constant determined by max leverage, not a
+    market variable. The OI/depth ratio, by contrast, genuinely varies over
+    time as open interest grows and shrinks, making it a better input for
+    dynamic allocation scaling.
+
     Returns a dict with:
-      - risk_score: float in [0, 1]
-      - critical_shock: smallest δ where A(δ) > threshold
+      - risk_score: float in [0, 1], based on 1 - exp(-oi_depth_ratio / ref)
+      - critical_shock: smallest δ where A(δ) > threshold (structural)
       - amplification_at_5pct: A(0.05) — amplification from a 5% shock
       - signal: bool — True if cascade risk is elevated
+      - oi_depth_ratio: total OI / orderbook depth
     """
+    depth = orderbook_depth_usd or DEFAULT_DEPTH_USD
+
     probe_shocks = np.arange(0.005, 0.505, 0.005)
     results = compute_amplification_curve(
         positions,
         current_price,
         probe_shocks,
-        orderbook_depth_usd,
+        depth,
     )
 
     # A(5%) — the headline amplification number
@@ -237,20 +256,17 @@ def cascade_risk_signal(
             critical_shock = r.initial_shock
             break
 
-    # Risk score: 0–1 based on how small the critical shock is.
-    # If a 5% shock already triggers threshold amplification → high risk.
-    # If even a 50% shock doesn't → low risk.
-    if critical_shock == float("inf"):
-        risk_score = 0.0
-    else:
-        # Map critical_shock from [0.5, 0.005] → [0, 1]
-        risk_score = max(0.0, min(1.0, 1.0 - (critical_shock - 0.005) / 0.495))
+    # Risk score: based on OI-to-depth ratio (time-varying)
+    total_oi = sum(pos.collateral_usd + pos.debt_usd for pos in positions)
+    oi_depth_ratio = total_oi / depth if depth > 0 else 0.0
+    risk_score = 1.0 - float(np.exp(-oi_depth_ratio / RISK_REFERENCE_RATIO))
 
     return {
         "risk_score": risk_score,
         "critical_shock": critical_shock if critical_shock != float("inf") else None,
         "amplification_at_5pct": amp_5pct,
         "signal": bool(risk_score > 0.5),
+        "oi_depth_ratio": oi_depth_ratio,
     }
 
 
