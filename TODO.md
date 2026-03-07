@@ -41,7 +41,7 @@ Everyone writes their own section of the technical notebook and pitchbook.
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 1. Data Pipeline | **DONE** | 7 venues x 5 coins, 5 parquet files committed |
-| 2a. Jump-Diffusion Models | **NOT STARTED** | Dataclasses defined; all 3 core functions are stubs |
+| 2a. Jump-Diffusion Models | **DONE** | Merton + Kou calibration, model comparison, jump-weighted risk |
 | 2b. Cascade Simulator | **DONE** | All functions implemented (~280 lines) |
 | 3. Carry Strategy | **NOT STARTED** | 3 core functions are stubs |
 | 3. Allocation | **DONE** | `allocate_positions` + `_enforce_risk_limits` implemented |
@@ -80,22 +80,14 @@ PYTHONPATH=src python scripts/pull_data.py --quick --coins BTC  # quick single-c
 
 ---
 
-## Phase 2a — Jump-Diffusion Models (John) -- BLOCKED
+## Phase 2a — Jump-Diffusion Models (John) -- DONE
 
 **Goal:** Calibrate jump models, compare Merton vs Kou.
 
-Dataclasses (`MertonParams`, `KouParams`, `ModelComparison`) are defined. `compare.py` logic is implemented but blocked by the calibration stubs.
-
-- [ ] **Merton jump-diffusion** (`models/merton.py`)
-  - `heuristic_calibration()` — iterative 3-sigma filtering
-  - `merton_log_density()` — Poisson-mixture log-likelihood
-  - `mle_calibration()` — L-BFGS-B optimization
-- [ ] **Kou double-exponential jump-diffusion** (`models/kou.py`)
-  - `heuristic_calibration()` — iterative 3-sigma filtering
-  - `kou_log_density()` — double-exponential mixture log-likelihood
-  - `mle_calibration()` — L-BFGS-B optimization
-- [ ] **Model comparison** (`models/compare.py`) — works once above are done
-  - AIC/BIC comparison, QQ plots, Jarque-Bera test
+- [x] **Merton jump-diffusion** (`models/merton.py`) — heuristic + MLE calibration, Poisson-mixture density
+- [x] **Kou double-exponential** (`models/kou.py`) — heuristic + MLE, FFT density recovery from characteristic function
+- [x] **Model comparison** (`models/compare.py`) — AIC/BIC: Merton uniformly preferred (Kou's extra parameter not justified)
+- [x] **Jump-weighted risk** (`models/risk.py`) — ∫ f(-δ)·δ·A(δ) dδ, combines jump tail probabilities with cascade amplification
 
 ## Phase 2b — Cascade Simulator (Antonio) -- COMPLETE
 

@@ -12,6 +12,7 @@ from funding_the_fall.models.cascade import (
     sensitivity_to_leverage,
     sensitivity_to_depth,
 )
+from funding_the_fall.models.risk import jump_weighted_risk, jump_weighted_risk_all_coins
 
 __all__ = [
     "calibrate_merton",
@@ -27,4 +28,6 @@ __all__ = [
     "compute_amplification_curve",
     "sensitivity_to_leverage",
     "sensitivity_to_depth",
+    "jump_weighted_risk",
+    "jump_weighted_risk_all_coins",
 ]
