@@ -57,16 +57,16 @@ def jump_weighted_risk(
         amplifications[i] = result.amplification
 
     # Trapezoidal integration
-    baseline_loss = float(np.trapz(density * delta_grid, delta_grid))
+    baseline_loss = float(np.trapezoid(density * delta_grid, delta_grid))
     amplified_loss = float(
-        np.trapz(density * delta_grid * amplifications, delta_grid)
+        np.trapezoid(density * delta_grid * amplifications, delta_grid)
     )
     cascade_excess = amplified_loss - baseline_loss
     cascade_multiplier = amplified_loss / baseline_loss if baseline_loss > 0 else 1.0
 
     # P(return ≤ -5%) ≈ ∫_{0.05}^{0.50} f(-δ) dδ
     mask = delta_grid >= 0.05
-    tail_prob = float(np.trapz(density[mask], delta_grid[mask]))
+    tail_prob = float(np.trapezoid(density[mask], delta_grid[mask]))
 
     # A(5%)
     idx = int(np.argmin(np.abs(delta_grid - 0.05)))

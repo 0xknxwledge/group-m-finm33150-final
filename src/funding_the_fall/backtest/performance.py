@@ -31,6 +31,7 @@ class PerformanceStats:
     avg_trade_pnl: float
     total_funding_collected: float
     total_trading_costs: float
+    total_liquidation_losses: float
     net_pnl: float
     calmar_ratio: float
 
@@ -57,7 +58,7 @@ def compute_performance(
             sharpe_ratio=0, max_drawdown=0, max_drawdown_duration_days=0,
             total_trades=0, win_rate=0, avg_trade_pnl=0,
             total_funding_collected=0, total_trading_costs=0,
-            net_pnl=0, calmar_ratio=0,
+            total_liquidation_losses=0, net_pnl=0, calmar_ratio=0,
         )
 
     # Returns
@@ -123,6 +124,7 @@ def compute_performance(
         avg_trade_pnl=avg_pnl,
         total_funding_collected=0.0,  # filled from BacktestResult
         total_trading_costs=total_fees,
+        total_liquidation_losses=0.0,  # filled from BacktestResult
         net_pnl=net_pnl,
         calmar_ratio=calmar,
     )
@@ -140,7 +142,8 @@ def compute_performance_from_result(
     # Fill in funding/costs from portfolio states
     if result.portfolio_states:
         stats.total_funding_collected = result.portfolio_states[-1].cumulative_funding
-        stats.total_trading_costs = result.portfolio_states[-1].cumulative_trading_costs
+        stats.total_trading_costs = result.portfolio_states[-1].cumulative_fees
+        stats.total_liquidation_losses = result.portfolio_states[-1].cumulative_liquidation_losses
 
     return stats
 
@@ -160,7 +163,8 @@ def pnl_decomposition(result: BacktestResult) -> pd.DataFrame:
             "timestamp": s.timestamp,
             "nav": s.nav,
             "cumulative_funding": s.cumulative_funding,
-            "cumulative_costs": s.cumulative_trading_costs,
+            "cumulative_fees": s.cumulative_fees,
+            "cumulative_liquidation_losses": s.cumulative_liquidation_losses,
             "n_positions": s.n_positions,
             "gross_leverage": s.gross_leverage,
         })

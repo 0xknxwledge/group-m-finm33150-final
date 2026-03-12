@@ -83,7 +83,8 @@ class PortfolioState:
     net_delta_pct: float
     n_positions: int
     cumulative_funding: float
-    cumulative_trading_costs: float
+    cumulative_fees: float
+    cumulative_liquidation_losses: float
     n_liquidations: int = 0
 
 
@@ -145,7 +146,7 @@ def run_backtest(
     funding_df: pd.DataFrame,
     candles_df: pd.DataFrame,
     initial_nav: float = 1_000_000.0,
-    carry_leverage: float = 4.0,
+    carry_leverage: float | dict[str, float] = 4.0,
     carry_budget_pct: float = 0.85,
     cascade_signals: list | None = None,
     cascade_leverage: float = 1.5,
@@ -164,8 +165,8 @@ def run_backtest(
         Price candles [timestamp, venue, coin, c, ...].
     initial_nav : float
         Starting capital in USD.
-    carry_leverage : float
-        Leverage per carry leg (each leg is isolated margin).
+    carry_leverage : float or dict[str, float]
+        Leverage per carry leg. If dict, keyed by coin for per-token leverage.
     carry_budget_pct : float
         Max fraction of NAV allocated as carry margin.
     cascade_signals : list of CascadeSignal, optional
@@ -204,7 +205,8 @@ def run_backtest(
     all_trades: list[Trade] = []
     states: list[PortfolioState] = []
     cumulative_funding = 0.0
-    cumulative_costs = 0.0
+    cumulative_fees = 0.0
+    cumulative_liq_losses = 0.0
     total_liquidations = 0
     next_pair_id = 0
 
@@ -235,7 +237,7 @@ def run_backtest(
             if pos.is_liquidated(price):
                 equity = max(pos.equity(price), 0.0)
                 cash += equity
-                cumulative_costs += pos.collateral - equity
+                cumulative_liq_losses += pos.collateral - equity
                 total_liquidations += 1
                 if pos.strategy == "carry":
                     liquidated_pair_ids.add(pos.pair_id)
@@ -257,7 +259,7 @@ def run_backtest(
                     equity = pos.equity(price)
                     exit_fee = VENUE_FEES.get(pos.venue, 0.0005) * pos.notional * fee_multiplier
                     cash += equity - exit_fee
-                    cumulative_costs += exit_fee
+                    cumulative_fees += exit_fee
                     all_trades.append(Trade(
                         timestamp=ts, coin=pos.coin, venue=pos.venue,
                         side="close_" + pos.side, notional_usd=pos.notional,
@@ -283,7 +285,8 @@ def run_backtest(
                 leg_collateral = pair_margin / 2
                 if leg_collateral <= 0:
                     continue
-                leg_notional = leg_collateral * carry_leverage
+                coin_lev = carry_leverage.get(sig.coin, 4.0) if isinstance(carry_leverage, dict) else carry_leverage
+                leg_notional = leg_collateral * coin_lev
 
                 long_fee = VENUE_FEES.get(sig.long_venue, 0.0005) * leg_notional * fee_multiplier
                 short_fee = VENUE_FEES.get(sig.short_venue, 0.0005) * leg_notional * fee_multiplier
@@ -297,17 +300,17 @@ def run_backtest(
                 positions.append(OpenPosition(
                     coin=sig.coin, venue=sig.long_venue, side="long",
                     entry_price=price, notional=leg_notional,
-                    collateral=leg_collateral, leverage=carry_leverage,
+                    collateral=leg_collateral, leverage=coin_lev,
                     strategy="carry", entry_timestamp=ts, pair_id=pid,
                 ))
                 positions.append(OpenPosition(
                     coin=sig.coin, venue=sig.short_venue, side="short",
                     entry_price=price, notional=leg_notional,
-                    collateral=leg_collateral, leverage=carry_leverage,
+                    collateral=leg_collateral, leverage=coin_lev,
                     strategy="carry", entry_timestamp=ts, pair_id=pid,
                 ))
                 cash -= pair_margin + entry_cost
-                cumulative_costs += entry_cost
+                cumulative_fees += entry_cost
 
                 all_trades.append(Trade(ts, sig.coin, sig.long_venue, "long",
                                         leg_notional, price, long_fee, "carry"))
@@ -315,10 +318,18 @@ def run_backtest(
                                         leg_notional, price, short_fee, "carry"))
 
             elif sig.action == "exit":
-                to_close, to_keep = [], []
+                # Find pair_ids where one leg is long on long_venue
+                # and the other is short on short_venue
+                target_pair_ids: set[int] = set()
                 for pos in positions:
                     if (pos.coin == sig.coin and pos.strategy == "carry"
-                            and pos.venue in (sig.long_venue, sig.short_venue)):
+                            and ((pos.venue == sig.long_venue and pos.side == "long")
+                                 or (pos.venue == sig.short_venue and pos.side == "short"))):
+                        target_pair_ids.add(pos.pair_id)
+                to_close, to_keep = [], []
+                for pos in positions:
+                    if (pos.strategy == "carry"
+                            and pos.pair_id in target_pair_ids):
                         to_close.append(pos)
                     else:
                         to_keep.append(pos)
@@ -327,7 +338,7 @@ def run_backtest(
                     equity = pos.equity(price)
                     exit_fee = VENUE_FEES.get(pos.venue, 0.0005) * pos.notional * fee_multiplier
                     cash += equity - exit_fee
-                    cumulative_costs += exit_fee
+                    cumulative_fees += exit_fee
                     all_trades.append(Trade(ts, pos.coin, pos.venue,
                                             "close_" + pos.side, pos.notional,
                                             price, exit_fee, "carry"))
@@ -358,7 +369,7 @@ def run_backtest(
                     strategy="cascade", entry_timestamp=ts,
                 ))
                 cash -= collateral + fee
-                cumulative_costs += fee
+                cumulative_fees += fee
                 all_trades.append(Trade(ts, sig.coin, sig.venue, "short",
                                         notional, price, fee, "cascade"))
 
@@ -374,7 +385,7 @@ def run_backtest(
                     equity = pos.equity(price)
                     exit_fee = VENUE_FEES.get(pos.venue, 0.0005) * pos.notional * fee_multiplier
                     cash += equity - exit_fee
-                    cumulative_costs += exit_fee
+                    cumulative_fees += exit_fee
                     all_trades.append(Trade(ts, pos.coin, pos.venue,
                                             "close_short", pos.notional,
                                             price, exit_fee, "cascade"))
@@ -392,7 +403,8 @@ def run_backtest(
             net_delta_pct=net_delta / nav if nav > 0 else 0.0,
             n_positions=len(positions),
             cumulative_funding=cumulative_funding,
-            cumulative_trading_costs=cumulative_costs,
+            cumulative_fees=cumulative_fees,
+            cumulative_liquidation_losses=cumulative_liq_losses,
             n_liquidations=total_liquidations,
         ))
 
